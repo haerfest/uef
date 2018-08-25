@@ -324,7 +324,7 @@ class Recorder(object):
     def __init__(self, frequency=44100, bits=16):
         assert(bits in [8, 16])
 
-        self._output_waveform = io.BytesIO()
+        self._output_wave = io.BytesIO()
         self._output_frequency = frequency
         self._output_bits = bits
 
@@ -337,6 +337,10 @@ class Recorder(object):
         self._base_silence = None
         self._fast_silence = None
         self._recalculate = True
+
+    @property
+    def wave(self):
+        return self._output_wave
 
     def set_base_frequency(self, frequency):
         self._base_frequency = frequency
@@ -363,14 +367,14 @@ class Recorder(object):
 
         if fast:
             if silent:
-                self._output_waveform.write(self._fast_silence.low_pulse)
+                self._output_wave.write(self._fast_silence.low_pulse)
             else:
-                self._output_waveform.write(self._fast_sine.low_pulse)
+                self._output_wave.write(self._fast_sine.low_pulse)
         else:
             if silent:
-                self._output_waveform.write(self._base_silence.low_pulse)
+                self._output_wave.write(self._base_silence.low_pulse)
             else:
-                self._output_waveform.write(self._base_sine.low_pulse)
+                self._output_wave.write(self._base_sine.low_pulse)
 
     def high_pulse(self, fast=False, silent=False):
         if self._recalculate:
@@ -379,15 +383,14 @@ class Recorder(object):
 
         if fast:
             if silent:
-                self._output_waveform.write(self._fast_silence.high_pulse)
+                self._output_wave.write(self._fast_silence.high_pulse)
             else:
-                self._output_waveform.write(self._fast_sine.high_pulse)
+                self._output_wave.write(self._fast_sine.high_pulse)
         else:
             if silent:
-                self._output_waveform.write(self._base_silence.high_pulse)
+                self._output_wave.write(self._base_silence.high_pulse)
             else:
-                self._output_waveform.write(self._base_sine.high_pulse)
-
+                self._output_wave.write(self._base_sine.high_pulse)
 
     def calculate_sines(self):
         self._base_sine = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits)
@@ -395,10 +398,40 @@ class Recorder(object):
         self._base_silence = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits, amplitude=0)
         self._fast_silence = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits, amplitude=0)
 
+    def write_riff(self, stream):
+        size = self._output_wave.tell()
+
+        stream.write(b'RIFF')
+        stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
+
+        # 4 bytes
+        stream.write(b'WAVE')
+
+        # 8 bytes
+        stream.write(b'fmt ')
+        stream.write(pack('<I', 16))
+
+        # 16 bytes
+        stream.write(pack('<h', 1))
+        stream.write(pack('<h', 1))
+        stream.write(pack('<I', self._output_frequency))
+        stream.write(pack('<I', self._output_frequency))
+        stream.write(pack('<h', 0))
+        stream.write(pack('<h', self._output_bits))
+
+        # 8 bytes
+        stream.write(b'data')
+        stream.write(pack('<I', size))
+
+        # size bytes
+        stream.write(self._output_wave.getbuffer())
+
 
 def parse_arguments():
     parser = ArgumentParser()
     parser.add_argument('ueffile', help='the UEF file to convert')
+    parser.add_argument('--frequency', help='the sample frequency in Hz', type=int, choices=[11025, 22050, 44100], default=44100)
+    parser.add_argument('--bits', help='the sample resolution in bits', type=int, choices=[8, 16], default=16)
     return parser.parse_args()
 
 
@@ -412,10 +445,12 @@ def main():
 
     print('ignored: ' + ', '.join(['&{:04x}'.format(i) for i in transformer.ignored]))
 
-    #with os.fdopen(sys.stdout.fileno(), 'wb') as f:
-    recorder = Recorder()
+    recorder = Recorder(args.frequency, args.bits)
     for r in recordables:
         r.record(recorder)
+
+    with open(args.ueffile + '.wav', 'wb') as f:
+        recorder.write_riff(f)
 
 
 if __name__ == '__main__':
