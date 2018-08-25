@@ -16,6 +16,9 @@ class Chunk(object):
         self.identifier = identifier
         self.data = data
 
+    def __repr__(self):
+        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), ' '.join('{:02x}'.format(x) for x in self.data[:10]))
+
 
 def chunks(ueffile):
     with open(ueffile, 'rb') as uef:
@@ -167,7 +170,7 @@ class FloatGap(Recordable):
         return '<FloatGap {:.1f} sec>'.format(self.seconds)
 
     def record(self, recorder):
-        cycle_count = int(round(self.seconds / (2 * recorder.frequency)))
+        cycle_count = int(self.seconds * 2 * recorder.base_frequency)
         for _ in range(cycle_count):
             recorder.low_pulse(fast=True, silent=True)
             recorder.high_pulse(fast=True, silent=True)
@@ -208,6 +211,10 @@ class Transformer(object):
                 return recordables
 
         self.ignored.add(chunk.identifier)
+        return []
+
+    def transform_0000(self, data):
+        print(data)
         return []
 
     def transform_0100(self, data):
@@ -251,7 +258,7 @@ class Transformer(object):
         upper, lower = unpack('<HB', data[:3])
         cycle_count = upper << 8 + lower
 
-        recordables = [FastCycle() if bit.value else SlowCycle() for _, bit in zip(range(cycle_count), self.bits(data[5:]))]
+        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle() for _, bit in zip(range(cycle_count), self.bits(data[5:]))]
 
         if recordables and data[3] == b'P':
             recordables[0] = HighPulse(recordables[0].value)
@@ -284,8 +291,6 @@ class Cycle(object):
     sample frequency, number of bits, and amplitude.
     '''
     def __init__(self, frequency, phase=0, sample_frequency=44100, bits=16, amplitude=1):
-        assert(bits in [8, 16])
-
         if bits == 8:
             silence_level = 127
             amplitude *= 127
@@ -293,43 +298,39 @@ class Cycle(object):
             silence_level = 0
             amplitude *= 32767
 
-        self._samples = io.BytesIO()
-        self._sample_count = int(sample_frequency // frequency)
+        self._bits = bits
+        self._phase = phase
+
+        self._samples = []
+        self._sample_count = math.ceil(sample_frequency // frequency)
 
         for t in range(self._sample_count):
             y = math.sin(phase + 2 * math.pi * t / self._sample_count)
-            y = math.trunc(silence_level + amplitude * y)
-            if bits == 8:
-                self._samples.write(pack('<B', y))
-            else:
-                self._samples.write(pack('<h', y))
-
-    def close():
-        self._samples.close()
+            self._samples.append(math.trunc(silence_level + amplitude * y))
 
     @property
     def low_pulse(self):
         i = 0
         j = self._sample_count // 2
-        return self._samples.getbuffer()[i:j]
+        return b''.join(self.pack(y) for y in self._samples[i:j])
 
     @property
     def high_pulse(self):
         i = self._sample_count // 2
         j = self._sample_count
-        return self._samples.getbuffer()[i:j]
+        return b''.join(self.pack(y) for y in self._samples[i:j])
+
+    def pack(self, y):
+        return pack('<B', y) if self._bits ==8 else pack('<h', y)
 
 
 class Recorder(object):
     def __init__(self, frequency=44100, bits=16):
-        assert(bits in [8, 16])
-
-        self._output_wave = io.BytesIO()
-        self._output_frequency = frequency
-        self._output_bits = bits
+        self._sample = io.BytesIO()
+        self._sample_frequency = frequency
+        self._bits = bits
 
         self._base_frequency = 1200.0
-        self._baud = 1200
         self._phase = math.radians(180)
 
         self._base_sine = None
@@ -337,10 +338,6 @@ class Recorder(object):
         self._base_silence = None
         self._fast_silence = None
         self._recalculate = True
-
-    @property
-    def wave(self):
-        return self._output_wave
 
     def set_base_frequency(self, frequency):
         self._base_frequency = frequency
@@ -367,14 +364,14 @@ class Recorder(object):
 
         if fast:
             if silent:
-                self._output_wave.write(self._fast_silence.low_pulse)
+                self._sample.write(self._fast_silence.low_pulse)
             else:
-                self._output_wave.write(self._fast_sine.low_pulse)
+                self._sample.write(self._fast_sine.low_pulse)
         else:
             if silent:
-                self._output_wave.write(self._base_silence.low_pulse)
+                self._sample.write(self._base_silence.low_pulse)
             else:
-                self._output_wave.write(self._base_sine.low_pulse)
+                self._sample.write(self._base_sine.low_pulse)
 
     def high_pulse(self, fast=False, silent=False):
         if self._recalculate:
@@ -383,23 +380,23 @@ class Recorder(object):
 
         if fast:
             if silent:
-                self._output_wave.write(self._fast_silence.high_pulse)
+                self._sample.write(self._fast_silence.high_pulse)
             else:
-                self._output_wave.write(self._fast_sine.high_pulse)
+                self._sample.write(self._fast_sine.high_pulse)
         else:
             if silent:
-                self._output_wave.write(self._base_silence.high_pulse)
+                self._sample.write(self._base_silence.high_pulse)
             else:
-                self._output_wave.write(self._base_sine.high_pulse)
+                self._sample.write(self._base_sine.high_pulse)
 
     def calculate_sines(self):
-        self._base_sine = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits)
-        self._fast_sine = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits)
-        self._base_silence = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits, amplitude=0)
-        self._fast_silence = Cycle(self._base_frequency, self._phase, self._output_frequency, self._output_bits, amplitude=0)
+        self._base_sine = Cycle(self._base_frequency, self._phase, self._sample_frequency, self._bits)
+        self._fast_sine = Cycle(2 * self._base_frequency, self._phase, self._sample_frequency, self._bits)
+        self._base_silence = Cycle(self._base_frequency, self._phase, self._sample_frequency, self._bits, amplitude=0)
+        self._fast_silence = Cycle(2 * self._base_frequency, self._phase, self._sample_frequency, self._bits, amplitude=0)
 
     def write_riff(self, stream):
-        size = self._output_wave.tell()
+        size = self._sample.tell()
 
         stream.write(b'RIFF')
         stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
@@ -414,17 +411,17 @@ class Recorder(object):
         # 16 bytes
         stream.write(pack('<h', 1))
         stream.write(pack('<h', 1))
-        stream.write(pack('<I', self._output_frequency))
-        stream.write(pack('<I', self._output_frequency))
-        stream.write(pack('<h', 0))
-        stream.write(pack('<h', self._output_bits))
+        stream.write(pack('<I', self._sample_frequency))
+        stream.write(pack('<I', self._sample_frequency * (1 if self._bits == 8 else 2)))
+        stream.write(pack('<h', self._bits // 8))
+        stream.write(pack('<h', self._bits))
 
         # 8 bytes
         stream.write(b'data')
         stream.write(pack('<I', size))
 
         # size bytes
-        stream.write(self._output_wave.getbuffer())
+        stream.write(self._sample.getbuffer())
 
 
 def parse_arguments():
@@ -447,6 +444,7 @@ def main():
 
     recorder = Recorder(args.frequency, args.bits)
     for r in recordables:
+        #print(r)
         r.record(recorder)
 
     with open(args.ueffile + '.wav', 'wb') as f:
