@@ -3,7 +3,12 @@
 from __future__ import print_function
 
 from argparse import ArgumentParser
-from struct import unpack
+from struct import pack, unpack
+
+import io
+import math
+import os
+import sys
 
 
 class Chunk(object):
@@ -176,7 +181,7 @@ class BaseFrequencyChange(Recordable):
         return '<BaseFrequencyChange {:.1f} Hz>'.format(self.frequency)
 
     def record(self, recorder):
-        recorder.frequency = self.frequency
+        recorder.base_frequency = self.frequency
 
 
 class PhaseChange(Recordable):
@@ -274,24 +279,43 @@ class Transformer(object):
 
 
 class Recorder(object):
-    def __init__(self):
-        self._frequency = 1200.0
+    def __init__(self, frequency=44100, bits=16):
+        assert(frequency in [11025, 22050, 44100])
+        assert(bits in [8, 16])
+
+        self._output_frequency = frequency
+        self._output_bits = bits
+
+        if bits == 8:
+            self._min_amplitude = 0
+            self._max_amplitude = 255
+        else:
+            self._min_amplitude = -32767
+            self._max_amplitude = 32768
+
+        self._level_amplitude = (self._min_amplitude + self._max_amplitude) / 2
+        self._amplitude_range = self._max_amplitude - self._level_amplitude
+
+        self._base_frequency = 1200.0
         self._baud = 1200
         self._phase = 180
-        self._update = True
 
-    def set_frequency(self, frequency):
-        self._frequency = frequency
-        self._update = True
+        self._sine = []
+        self._recalculate = True
+        self._waveform = io.BytesIO()
 
-    def get_frequency(self):
-        return self._frequency
+    def set_base_frequency(self, frequency):
+        self._base_frequency = frequency
+        self._recalculate = True
 
-    frequency = property(get_frequency, set_frequency)
+    def get_base_frequency(self):
+        return self._base_frequency
+
+    base_frequency = property(get_base_frequency, set_base_frequency)
 
     def set_phase(self, phase):
         self._phase = phase
-        self._update = True
+        self._recalculate = True
 
     def get_phase(self):
         return self._phase
@@ -299,10 +323,46 @@ class Recorder(object):
     phase = property(get_phase, set_phase)
 
     def low_pulse(self, n=1, amplitude=1.0):
-        pass
+        if self._recalculate:
+            self.calculate_sine()
+            self._recalculate = False
+
+        self.sample_pulse(
+            i=0,
+            j=self._output_frequency // 2,
+            n=n,
+            amplitude=amplitude)
 
     def high_pulse(self, n=1, amplitude=1.0):
-        pass
+        if self._recalculate:
+            self.calculate_sine()
+            self._recalculate = False
+
+        self.sample_pulse(
+            i=self._output_frequency // 2,
+            j=self._output_frequency,
+            n=n,
+            amplitude=amplitude)
+
+    def sample_pulse(self, i, j, n, amplitude):
+        for x in range(i, j, n):
+            self._waveform.write(self.sample(x, amplitude))
+
+    def sample(self, x, amplitude):
+        y = math.trunc(
+            self.clamp(
+                self._level_amplitude + self._amplitude_range * amplitude * self._sine[x],
+                self._min_amplitude,
+                self._max_amplitude))
+        return pack('<B', y) if self._output_bits == 8 else pack('<h', y)
+
+    def clamp(self, x, a, b):
+        return max(a, min(b, x))
+
+    def calculate_sine(self):
+        phase = math.radians(self._phase)
+        divisor = self._base_frequency * 2 * math.pi
+        self._sine = [math.sin(phase + x / divisor) for x in range(self._output_frequency)]
 
 
 def parse_arguments():
@@ -321,8 +381,10 @@ def main():
 
     print('ignored: ' + ', '.join(['&{:04x}'.format(i) for i in transformer.ignored]))
 
+    #with os.fdopen(sys.stdout.fileno(), 'wb') as f:
     recorder = Recorder()
     for r in recordables:
+        print(r)
         r.record(recorder)
 
 
