@@ -266,12 +266,41 @@ class Transformer(object):
         '''
         Implicit start/stop bit tape data block.
         '''
-        bits = []
+        recordables = []
         for byte in data:
-            bits.append(StartBit())
-            bits.extend(self.bits(byte))
-            bits.append(StopBit())
-        return bits
+            recordables.append(StartBit())
+            recordables.extend(self.bits(byte))
+            recordables.append(StopBit())
+
+        return recordables
+
+    def transform_0104(self, data):
+        '''
+        Defined tape format data block.
+        '''
+        data_bit_count, parity, stop_bit_count = unpack('<Bcb', data[:3])
+
+        recordables = []
+        for byte in data[3:]:
+            recordables.append(StartBit())
+
+            bits = self.bits(byte)[:data_bit_count]
+            recordables.extend(bits)
+
+            odd_parity = False
+            for bit in bits:
+                odd_parity ^= isinstance(bit, OneBit)
+            if parity == b'E':
+                recordables.append(OneBit() if odd_parity else ZeroBit())
+            elif parity == b'O':
+                recordables.append(ZeroBit() if odd_parity else OneBit())
+
+            recordables.extend([StopBit()] * abs(stop_bit_count))
+
+            if stop_bit_count < 0:
+                recordables.append(FastCycle())
+
+        return recordables
 
     def transform_0110(self, data):
         '''
@@ -498,10 +527,10 @@ def main():
     for chunk in chunks(args.ueffile):
         if args.debug:
             print(chunk)
-        recordable = transformer.transform(chunk)
+        recordables = transformer.transform(chunk)
         if not args.norecord:
-            for r in recordable:
-                r.record(recorder)
+            for recordable in recordables:
+                recordable.record(recorder)
 
     print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.encountered)]))
     print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.ignored)]))
