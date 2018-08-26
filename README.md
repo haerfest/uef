@@ -38,25 +38,29 @@ usage: uef2wave.py [-h] [--frequency {11025,22050,44100}] [--bits {8,16}]
                    ueffile
 
 positional arguments:
-  ueffile               the UEF file to convert
+  ueffile               the UEF file to convert, (g)zipped or not
 
 optional arguments:
   -h, --help            show this help message and exit
   --frequency {11025,22050,44100}
-                        the sample frequency in Hz
-  --bits {8,16}         the sample resolution in bits
+                        the sample frequency in Hz (default 44100)
+  --bits {8,16}         the sample resolution in bits (default 16)
   --debug               enable debug output
   --norecord            do not record a wave file
 ```
 
-By default it records a `.wav` file at 44,100 Hz and 16-bit resolution, but you
-can change that if you want.
+Since UEF files are often gzipped, and [Stairway To Hell](https://www.stairwaytohell.com)
+carries `.zip` files containing gzipped `.uef` files, you can pass along any of
+such files. In case of a `.zip` file, the first `.uef` inside is processed.
 
 Example:
 
 ```
 $ python3 uef2wave.py Elite_E.zip
 Elite_E.zip
+................................................................................
+................................................................................
+....................................................
 Chunk IDs encountered ... &0100, &0110, &0112
 Chunk IDs ignored ....... &0000
 Markers:

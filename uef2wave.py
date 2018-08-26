@@ -601,9 +601,9 @@ class Recorder(object):
 
 def parse_arguments():
     parser = ArgumentParser()
-    parser.add_argument('ueffile', help='the UEF file to convert')
-    parser.add_argument('--frequency', help='the sample frequency in Hz', type=int, choices=[11025, 22050, 44100], default=44100)
-    parser.add_argument('--bits', help='the sample resolution in bits', type=int, choices=[8, 16], default=16)
+    parser.add_argument('ueffile', help='the UEF file to convert, (g)zipped or not')
+    parser.add_argument('--frequency', help='the sample frequency in Hz (default 44100)', type=int, choices=[11025, 22050, 44100], default=44100)
+    parser.add_argument('--bits', help='the sample resolution in bits (default 16)', type=int, choices=[8, 16], default=16)
     parser.add_argument('--debug', help='enable debug output', action='store_true')
     parser.add_argument('--norecord', help='do not record a wave file', action='store_true')
     return parser.parse_args()
@@ -617,11 +617,11 @@ def main():
     reader = ChunkReader(args.ueffile)
     print(os.path.basename(args.ueffile))
     for chunk in reader.chunks:
-        if args.debug:
-            print(chunk)
+        print(chunk) if args.debug else print('.', end='', flush=True)
         if not args.norecord:
             chunk.record(recorder)
 
+    print()
     print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)]))
     print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)]))
     print('Markers:')
