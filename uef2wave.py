@@ -189,14 +189,14 @@ class Carrier(Recordable):
 
 
 class IntegerGap(Recordable):
-    def __init__(self, n):
-        self.n = n
+    def __init__(self, cycle_count):
+        self.cycle_count = cycle_count
 
     def __repr__(self):
-        return '<IntegerGap {}>'.format(self.n)
+        return '<IntegerGap {} cycles>'.format(self.cycle_count)
 
     def record(self, recorder):
-        for _ in range(self.n):
+        for _ in range(self.cycle_count):
             recorder.low_pulse(fast=True, silent=True)
             recorder.high_pulse(fast=True, silent=True)
 
