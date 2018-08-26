@@ -120,6 +120,12 @@ class Carrier(Recordable):
             recorder.low_pulse(fast=True)
             recorder.high_pulse(fast=True)
 
+            # According to the UEF spec only 'cycle_count' fast cycles
+            # should be written, but some tapes don't load this way
+            # (e.g. JetSetWilly_E.zip and Hopper-PIASRR_E).
+            recorder.low_pulse(fast=True)
+            recorder.high_pulse(fast=True)
+
 
 class IntegerGap(Recordable):
     def __init__(self, cycle_count):
