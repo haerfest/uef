@@ -6,7 +6,20 @@ or PC and load them via the cassette interface on your Acorn. I test on an
 Electron.
 
 The tape images should be in [UEF](https://en.wikipedia.org/wiki/Unified_Emulator_Format)
-format. You can [read its specification](http://electrem.emuunlim.com/UEFSpecs.htm).
+format.
+
+You can [read its specification](http://electrem.emuunlim.com/UEFSpecs.htm), but
+note there seems to be a small mistake with the description of the carrier wave
+(emphasis mine):
+
+> output a **single** cycle at twice the current base frequency
+
+This makes some games fail to load on an Electron, notably [JetSetWilly_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Tynesoft/JetSetWilly_E.zip)
+and [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip).
+
+Other implementations I've checked, including the [reference one](https://github.com/TomHarte/CLK/blob/master/Storage/Tape/Formats/TapeUEF.cpp),
+treat one carrier cycle the same as a one-bit, which outputs _two_ cycles at a
+time. With that fix in place, the above games load successfully.
 
 ## Supported chunks
 
@@ -63,11 +76,12 @@ Elite_E.zip
 ....................................................
 Chunk IDs encountered ... &0100, &0110, &0112
 Chunk IDs ignored ....... &0000
+Total time .............. 04:55
 Markers:
-  00:01 ELITE
-  00:06 ELITEdata
-  01:01 ELITEcode
-  04:22 V1
+  00:02 ELITE
+  00:09 ELITEdata
+  01:11 ELITEcode
+  04:53 V1
 ```
 
 It prints which chunks it encountered and which one it ignored, which is really
