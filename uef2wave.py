@@ -259,7 +259,7 @@ class Transformer(object):
         '''
         Origin information chunk.
         '''
-        print('> {}'.format(data.decode('utf-8')[:-1]))
+        print('> {}'.format(data.rstrip(b'\x00').decode('utf-8')))
         return []
 
     def transform_0100(self, data):
