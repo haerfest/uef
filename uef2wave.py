@@ -434,6 +434,7 @@ def parse_arguments():
     parser.add_argument('ueffile', help='the UEF file to convert')
     parser.add_argument('--frequency', help='the sample frequency in Hz', type=int, choices=[11025, 22050, 44100], default=44100)
     parser.add_argument('--bits', help='the sample resolution in bits', type=int, choices=[8, 16], default=16)
+    parser.add_argument('--debug', type=bool, default=False)
     return parser.parse_args()
 
 
@@ -445,9 +446,11 @@ def main():
     transformer = Transformer()
     for chunk in chunks(args.ueffile):
         recordable = transformer.transform(chunk)
-        print(chunk)
+        if args.debug:
+            print(chunk)
         for r in recordable:
-            print(r)
+            if args.debug:
+                print(r)
             r.record(recorder)
 
     print('ignored: ' + ', '.join(['&{:04x}'.format(i) for i in transformer.ignored]))
