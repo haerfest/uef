@@ -72,7 +72,7 @@ class ZeroBit(SlowCycle):
     Represents a zero-bit.
     '''
     def __repr__(self):
-        return '<Bit 0>'
+        return '0'
 
 
 class OneBit(Recordable):
@@ -80,7 +80,7 @@ class OneBit(Recordable):
     Represents a one-bit.
     '''
     def __repr__(self):
-        return '<Bit 1>'
+        return '1'
 
     def record(self, recorder):
         recorder.low_pulse(fast=True)
@@ -177,13 +177,6 @@ class Marker(object):
 
     def __repr__(self):
         return '<Marker {}" {}">'.format(self.timestamp, self.printable)
-
-    @property
-    def timestamp(self):
-        seconds = int(self.microseconds // 1000000)
-        minutes = int(seconds // 60)
-        seconds %= 60
-        return '{:02d}:{:02d}'.format(minutes, seconds)
 
     @property
     def printable(self):
@@ -608,6 +601,11 @@ def parse_arguments():
     parser.add_argument('--norecord', help='do not record a wave file', action='store_true')
     return parser.parse_args()
 
+def to_mm_ss(microseconds):
+    seconds = int(microseconds // 1000000)
+    minutes = int(seconds // 60)
+    seconds %= 60
+    return '{:02d}:{:02d}'.format(minutes, seconds)
 
 def main():
     args = parse_arguments()
@@ -617,16 +615,22 @@ def main():
     reader = ChunkReader(args.ueffile)
     print(os.path.basename(args.ueffile))
     for chunk in reader.chunks:
-        print(chunk) if args.debug else print('.', end='', flush=True)
+        if args.debug:
+            print(chunk)
+            print(chunk.recordables)
+        else:
+            print('.', end='', flush=True)
+
         if not args.norecord:
             chunk.record(recorder)
 
     print()
-    print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)]))
-    print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)]))
+    print('Chunk IDs encountered ... {}'.format(', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)])))
+    print('Chunk IDs ignored ....... {}'.format(', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)])))
+    print('Total time .............. {}'.format(to_mm_ss(recorder.microseconds)))
     print('Markers:')
     for marker in recorder.markers:
-        print('  {} {}'.format(marker.timestamp, marker.printable))
+        print('  {} {}'.format(to_mm_ss(marker.microseconds), marker.printable))
 
     if not args.norecord:
         outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
