@@ -219,18 +219,6 @@ class Chunk(object):
         return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), s)
 
 
-class Chunk0000(Chunk):
-    '''
-    Origin information chunk.
-    '''
-    @property
-    def recordables(self):
-        return []
-
-    def __repr__(self):
-        return '<Chunk &0000 "{}">'.format(self.data.rstrip(b'\x00').decode('utf-8'))
-
-
 class Chunk0100(Chunk):
     '''
     Implicit start/stop bit tape data block.
