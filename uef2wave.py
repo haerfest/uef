@@ -3,12 +3,15 @@
 from __future__ import print_function
 
 from argparse import ArgumentParser
+from contextlib import contextmanager
 from struct import pack, unpack
 
+import gzip
 import io
 import math
 import os
 import sys
+import zipfile
 
 
 class Chunk(object):
@@ -20,8 +23,44 @@ class Chunk(object):
         return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), ' '.join('{:02x}'.format(x) for x in self.data[:10]))
 
 
+
+class FileReader(object):
+    @staticmethod
+    def open(filename):
+        return open(filename, 'rb')
+
+
+class ZipReader(object):
+    @staticmethod
+    def open(file):
+        if not zipfile.is_zipfile(file):
+            file.seek(0)
+            return file
+
+        zip = zipfile.ZipFile(file, 'r')
+        uefs = [filename for filename in zip.namelist() if os.path.splitext(filename)[1].lower() == '.uef']
+        if not uefs:
+            raise Exception('no UEF files found in ZIP archive')
+        return zip.open(uefs[0], 'r')
+
+
+class GzipReader(object):
+    @staticmethod
+    def open(file):
+        f = gzip.open(file)
+        try:
+            f.peek(2)
+            return f
+        except OSError:
+            return file
+
+
+def open_uef(filename):
+    return GzipReader.open(ZipReader.open(FileReader.open(filename)))
+
+
 def chunks(ueffile):
-    with open(ueffile, 'rb') as uef:
+    with open_uef(ueffile) as uef:
         # Check the magic value, indicating it's a UEF file.
         magic = uef.read(10)
         if magic != b'UEF File!\x00':
