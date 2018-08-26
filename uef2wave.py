@@ -221,7 +221,12 @@ class Transformer(object):
         '''
         Implicit start/stop bit tape data block.
         '''
-        return [StartBit()] + self.bits(data) + [StopBit()]
+        bits = []
+        for byte in data:
+            bits.append(StartBit())
+            bits.extend(self.bits(byte))
+            bits.append(StopBit())
+        return bits
 
     def transform_0110(self, data):
         '''
@@ -281,8 +286,8 @@ class Transformer(object):
         seconds = unpack('<f', data)[0]
         return [FloatGap(seconds)]
 
-    def bits(self, bytes):
-        return [OneBit() if byte & (1 << i) else ZeroBit() for byte in bytes for i in range(8)]
+    def bits(self, byte):
+        return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
 
 
 class Cycle(object):
@@ -321,7 +326,7 @@ class Cycle(object):
         return b''.join(self.pack(y) for y in self._samples[i:j])
 
     def pack(self, y):
-        return pack('<B', y) if self._bits ==8 else pack('<h', y)
+        return pack('<B', y) if self._bits == 8 else pack('<h', y)
 
 
 class Recorder(object):
@@ -436,16 +441,16 @@ def main():
     args = parse_arguments()
 
     recordables = []
+    recorder = Recorder(args.frequency, args.bits)
     transformer = Transformer()
     for chunk in chunks(args.ueffile):
-        recordables.extend(transformer.transform(chunk))
+        recordable = transformer.transform(chunk)
+        print(chunk)
+        for r in recordable:
+            print(r)
+            r.record(recorder)
 
     print('ignored: ' + ', '.join(['&{:04x}'.format(i) for i in transformer.ignored]))
-
-    recorder = Recorder(args.frequency, args.bits)
-    for r in recordables:
-        #print(r)
-        r.record(recorder)
 
     with open(args.ueffile + '.wav', 'wb') as f:
         recorder.write_riff(f)
