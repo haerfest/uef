@@ -259,7 +259,7 @@ class Transformer(object):
         '''
         Origin information chunk.
         '''
-        print('> {}'.format(data.decode('utf-8')))
+        print('> {}'.format(data.decode('utf-8')[:-1]))
         return []
 
     def transform_0100(self, data):
@@ -285,7 +285,7 @@ class Transformer(object):
         Carrier tone with dummy byte.
         '''
         length1, length2 = unpack('<HH', data)
-        return [Carrier(length1), StartBit()] + self.bits(b'\xAA') + [StopBit(), Carrier(length2)]
+        return [Carrier(length1), StartBit()] + self.bits(0xAA) + [StopBit(), Carrier(length2)]
 
     def transform_0112(self, data):
         '''
@@ -483,6 +483,7 @@ def parse_arguments():
     parser.add_argument('--frequency', help='the sample frequency in Hz', type=int, choices=[11025, 22050, 44100], default=44100)
     parser.add_argument('--bits', help='the sample resolution in bits', type=int, choices=[8, 16], default=16)
     parser.add_argument('--debug', help='enable debug output', action='store_true')
+    parser.add_argument('--norecord', help='do not record a wave file', action='store_true')
     return parser.parse_args()
 
 
@@ -492,19 +493,23 @@ def main():
     recordables = []
     recorder = Recorder(args.frequency, args.bits)
     transformer = Transformer()
+
+    print(os.path.basename(args.ueffile))
     for chunk in chunks(args.ueffile):
         if args.debug:
             print(chunk)
         recordable = transformer.transform(chunk)
-        for r in recordable:
-            r.record(recorder)
+        if not args.norecord:
+            for r in recordable:
+                r.record(recorder)
 
     print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.encountered)]))
     print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.ignored)]))
 
-    outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
-    with open(outfile, 'wb') as f:
-        recorder.write_riff(f)
+    if not args.norecord:
+        outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
+        with open(outfile, 'wb') as f:
+            recorder.write_riff(f)
 
 
 if __name__ == '__main__':
