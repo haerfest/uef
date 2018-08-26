@@ -4,12 +4,14 @@ from __future__ import print_function
 
 from argparse import ArgumentParser
 from contextlib import contextmanager
+from datetime import timedelta
 from struct import pack, unpack
 
 import gzip
 import io
 import math
 import os
+import string
 import sys
 import zipfile
 
@@ -168,6 +170,26 @@ class PhaseChange(Recordable):
         recorder.phase = self.phase
 
 
+class Marker(object):
+    def __init__(self, microseconds, description):
+        self.microseconds = microseconds
+        self.description = description
+
+    def __repr__(self):
+        return '<Marker {}" {}">'.format(self.timestamp, self.printable)
+
+    @property
+    def timestamp(self):
+        seconds = int(self.microseconds // 1000000)
+        minutes = int(seconds // 60)
+        seconds %= 60
+        return '{:02d}:{:02d}'.format(minutes, seconds)
+
+    @property
+    def printable(self):
+        return ''.join(c if ' ' <= c <= '~' else '?' for c in self.description)
+
+
 class Chunk(object):
     '''
     Base chunk representation. Keeps track of its identifier and data, and
@@ -188,12 +210,13 @@ class Chunk(object):
 
     def bits(self, byte):
         '''
-        Helper method to turns a byte into a sequence of recordable bits.
+        Helper method to turn a byte into a sequence of recordable bits.
         '''
         return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
 
     def __repr__(self):
-        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), ' '.join('{:02x}'.format(x) for x in self.data[:10]))
+        s = ' '.join('{:02x}'.format(x) for x in self.data[:10])
+        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), s)
 
 
 class Chunk0000(Chunk):
@@ -221,6 +244,27 @@ class Chunk0100(Chunk):
             recordables.append(StopBit())
 
         return recordables
+
+    def record(self, recorder):
+        if self.data[0] == ord('*'):
+            filename, block = self.parse_block()
+            if block == 0:
+                recorder.markers.append(Marker(recorder.microseconds, filename))
+
+        super(Chunk0100, self).record(recorder)
+
+    def parse_block(self):
+        filename = ''
+        for i in range(10):
+            ascii = self.data[1 + i]
+            if ascii == 0:
+                break
+            filename += chr(ascii)
+        block = unpack('<H', self.data[i + 10:i + 12])[0]
+        return filename, block
+
+    def __repr__(self):
+        return '<Chunk &0100 {} ...>'.format(self.data[:20])
 
 
 class Chunk0104(Chunk):
@@ -274,7 +318,7 @@ class Chunk0111(Chunk):
         return [Carrier(length1), StartBit()] + self.bits(0xAA) + [StopBit(), Carrier(length2)]
 
 
-class Chun0112(Chunk):
+class Chunk0112(Chunk):
     '''
     Integer gap.
     '''
@@ -428,6 +472,7 @@ class Cycle(object):
             silence_level = 0
             amplitude *= 32767
 
+        self._frequency = frequency
         self._bits = bits
         self._phase = phase
 
@@ -437,6 +482,13 @@ class Cycle(object):
         for t in range(self._sample_count):
             y = math.sin(phase + 2 * math.pi * t / self._sample_count)
             self._samples.append(math.trunc(silence_level + amplitude * y))
+
+    @property
+    def pulse_duration(self):
+        '''
+        Returns the duration of a single pulse in microseconds.
+        '''
+        return 500000 // self._frequency
 
     @property
     def low_pulse(self):
@@ -469,6 +521,17 @@ class Recorder(object):
         self._fast_silence = None
         self._recalculate = True
 
+        self._microseconds = 0
+        self._markers = []
+
+    @property
+    def markers(self):
+        return self._markers
+
+    @property
+    def microseconds(self):
+        return self._microseconds
+
     def set_base_frequency(self, frequency):
         self._base_frequency = frequency
         self._recalculate = True
@@ -493,15 +556,12 @@ class Recorder(object):
             self._recalculate = False
 
         if fast:
-            if silent:
-                self._sample.write(self._fast_silence.low_pulse)
-            else:
-                self._sample.write(self._fast_sine.low_pulse)
+            sample = self._fast_silence if silent else self._fast_sine
         else:
-            if silent:
-                self._sample.write(self._base_silence.low_pulse)
-            else:
-                self._sample.write(self._base_sine.low_pulse)
+            sample = self._base_silence if silent else self._base_sine
+
+        self._sample.write(sample.low_pulse)
+        self._microseconds += sample.pulse_duration
 
     def high_pulse(self, fast=False, silent=False):
         if self._recalculate:
@@ -509,15 +569,12 @@ class Recorder(object):
             self._recalculate = False
 
         if fast:
-            if silent:
-                self._sample.write(self._fast_silence.high_pulse)
-            else:
-                self._sample.write(self._fast_sine.high_pulse)
+            sample = self._fast_silence if silent else self._fast_sine
         else:
-            if silent:
-                self._sample.write(self._base_silence.high_pulse)
-            else:
-                self._sample.write(self._base_sine.high_pulse)
+            sample = self._base_silence if silent else self._base_sine
+
+        self._sample.write(sample.high_pulse)
+        self._microseconds += sample.pulse_duration
 
     def calculate_sines(self):
         self._base_sine = Cycle(self._base_frequency, self._phase, self._sample_frequency, self._bits)
@@ -579,6 +636,9 @@ def main():
 
     print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)]))
     print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)]))
+    print('Markers:')
+    for marker in recorder.markers:
+        print('  {} {}'.format(marker.timestamp, marker.printable))
 
     if not args.norecord:
         outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
