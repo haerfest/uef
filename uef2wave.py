@@ -14,75 +14,6 @@ import sys
 import zipfile
 
 
-class Chunk(object):
-    def __init__(self, identifier, data):
-        self.identifier = identifier
-        self.data = data
-
-    def __repr__(self):
-        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), ' '.join('{:02x}'.format(x) for x in self.data[:10]))
-
-
-
-class FileReader(object):
-    @staticmethod
-    def open(filename):
-        return open(filename, 'rb')
-
-
-class ZipReader(object):
-    @staticmethod
-    def open(file):
-        if not zipfile.is_zipfile(file):
-            file.seek(0)
-            return file
-
-        zip = zipfile.ZipFile(file, 'r')
-        uefs = [filename for filename in zip.namelist() if os.path.splitext(filename)[1].lower() == '.uef']
-        if not uefs:
-            raise Exception('no UEF files found in ZIP archive')
-        return zip.open(uefs[0], 'r')
-
-
-class GzipReader(object):
-    @staticmethod
-    def open(file):
-        f = gzip.open(file)
-        try:
-            f.peek(2)
-            return f
-        except OSError:
-            return file
-
-
-def open_uef(filename):
-    return GzipReader.open(ZipReader.open(FileReader.open(filename)))
-
-
-def chunks(ueffile):
-    with open_uef(ueffile) as uef:
-        # Check the magic value, indicating it's a UEF file.
-        magic = uef.read(10)
-        if magic != b'UEF File!\x00':
-            raise Exception('{}: not a UEF file'.format(ueffile))
-
-        # Skip over the UEF version.
-        uef.read(2)
-
-        while True:
-            # Read the chunk identifier and test for EOF.
-            identifier = uef.read(2)
-            if len(identifier) == 0:
-                break
-            identifier = unpack('<H', identifier)[0]
-
-            # Read the length and data bytes.
-            length = unpack('<I', uef.read(4))[0]
-            data = uef.read(length)
-
-            yield Chunk(identifier, data)
-
-
 class Recordable(object):
     def record(self, recorder):
         raise Exception('{}; record() not implemented'.format(type(self)))
@@ -237,51 +168,71 @@ class PhaseChange(Recordable):
         recorder.phase = self.phase
 
 
-class Transformer(object):
-    def __init__(self):
-        self.encountered = set()
-        self.ignored = set()
+class Chunk(object):
+    '''
+    Base chunk representation. Keeps track of its identifier and data, and
+    specifies an interface for other chunks to turn themselves into a sequence
+    of Recordables for recording on a Recorder.
+    '''
+    def __init__(self, identifier, data):
+        self.identifier = identifier
+        self.data = data
 
-    def transform(self, chunk):
-        self.encountered.add(chunk.identifier)
-
-        method = 'transform_{:04x}'.format(chunk.identifier)
-        transformer = getattr(self, method, None)
-        if transformer and callable(transformer):
-            recordables = transformer(chunk.data)
-            if recordables:
-                return recordables
-
-        self.ignored.add(chunk.identifier)
+    @property
+    def recordables(self):
         return []
 
-    def transform_0000(self, data):
+    def record(self, recorder):
+        for recordable in self.recordables:
+            recordable.record(recorder)
+
+    def bits(self, byte):
         '''
-        Origin information chunk.
+        Helper method to turns a byte into a sequence of recordable bits.
         '''
-        print('> {}'.format(data.rstrip(b'\x00').decode('utf-8')))
+        return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
+
+    def __repr__(self):
+        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), ' '.join('{:02x}'.format(x) for x in self.data[:10]))
+
+
+class Chunk0000(Chunk):
+    '''
+    Origin information chunk.
+    '''
+    @property
+    def recordables(self):
         return []
 
-    def transform_0100(self, data):
-        '''
-        Implicit start/stop bit tape data block.
-        '''
+    def __repr__(self):
+        return '<Chunk &0000 "{}">'.format(self.data.rstrip(b'\x00').decode('utf-8'))
+
+
+class Chunk0100(Chunk):
+    '''
+    Implicit start/stop bit tape data block.
+    '''
+    @property
+    def recordables(self):
         recordables = []
-        for byte in data:
+        for byte in self.data:
             recordables.append(StartBit())
             recordables.extend(self.bits(byte))
             recordables.append(StopBit())
 
         return recordables
 
-    def transform_0104(self, data):
-        '''
-        Defined tape format data block.
-        '''
-        data_bit_count, parity, stop_bit_count = unpack('<Bcb', data[:3])
+
+class Chunk0104(Chunk):
+    '''
+    Defined tape format data block.
+    '''
+    @property
+    def recordables(self):
+        data_bit_count, parity, stop_bit_count = unpack('<Bcb', self.data[:3])
 
         recordables = []
-        for byte in data[3:]:
+        for byte in self.data[3:]:
             recordables.append(StartBit())
 
             bits = self.bits(byte)[:data_bit_count]
@@ -302,69 +253,166 @@ class Transformer(object):
 
         return recordables
 
-    def transform_0110(self, data):
-        '''
-        Carrier tone.
-        '''
-        cycle_count = unpack('<H', data)[0]
+
+class Chunk0110(Chunk):
+    '''
+    Carrier tone.
+    '''
+    @property
+    def recordables(self):
+        cycle_count = unpack('<H', self.data)[0]
         return [Carrier(cycle_count)]
 
-    def transform_0111(self, data):
-        '''
-        Carrier tone with dummy byte.
-        '''
-        length1, length2 = unpack('<HH', data)
+
+class Chunk0111(Chunk):
+    '''
+    Carrier tone with dummy byte.
+    '''
+    @property
+    def recordables(self):
+        length1, length2 = unpack('<HH', self.data)
         return [Carrier(length1), StartBit()] + self.bits(0xAA) + [StopBit(), Carrier(length2)]
 
-    def transform_0112(self, data):
-        '''
-        Integer gap.
-        '''
-        n = unpack('<H', data)[0]
+
+class Chun0112(Chunk):
+    '''
+    Integer gap.
+    '''
+    @property
+    def recordables(self):
+        n = unpack('<H', self.data)[0]
         return [IntegerGap(n)]
 
-    def transform_0113(self, data):
-        '''
-        Change of base frequency.
-        '''
-        frequency = unpack('<f', data)[0]
+
+class Chunk0113(Chunk):
+    '''
+    Change of base frequency.
+    '''
+    @property
+    def recordables(self):
+        frequency = unpack('<f', self.data)[0]
         return [BaseFrequencyChange(frequency)]
 
-    def transform_0114(self, data):
-        '''
-        Security cycles.
-        '''
-        upper, lower = unpack('<HB', data[:3])
+
+class Chunk0114(Chunk):
+    '''
+    Security cycles.
+    '''
+    @property
+    def recordables(self):
+        upper, lower = unpack('<HB', self.data[:3])
         cycle_count = upper << 8 + lower
 
         bits = []
-        for byte in data[5:]:
+        for byte in self.data[5:]:
             bits.extend(self.bits(byte))
         recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle() for _, bit in zip(range(cycle_count), bits)]
 
-        if recordables and data[3] == b'P':
+        if recordables and self.data[3] == b'P':
             recordables[0] = HighPulse(recordables[0].value)
-        if recordables and data[4] == b'P':
+        if recordables and self.data[4] == b'P':
             recordables[-1] = LowPulse(recordables[-1].value)
 
         return recordables
 
-    def transform_0115(self, data):
-        '''
-        Phase change.
-        '''
-        phase = unpack('<H', data)[0]
+
+class Chunk0115(Chunk):
+    '''
+    Phase change.
+    '''
+    @property
+    def recordables(self):
+        phase = unpack('<H', self.data)[0]
         return [PhaseChange(phase)]
 
-    def transform_0116(self, data):
-        '''
-        Floating point gap.
-        '''
-        seconds = unpack('<f', data)[0]
+
+class Chunk0116(Chunk):
+    '''
+    Floating point gap.
+    '''
+    @property
+    def recordables(self):
+        seconds = unpack('<f', self.data)[0]
         return [FloatGap(seconds)]
 
-    def bits(self, byte):
-        return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
+
+class ChunkFactory(object):
+    @staticmethod
+    def create(identifier, data):
+        class_name = 'Chunk{:04x}'.format(identifier)
+        class_ = getattr(sys.modules[__name__], class_name, None)
+        return class_(identifier, data) if class_ else None
+
+
+class FileReader(object):
+    @staticmethod
+    def open(filename):
+        return open(filename, 'rb')
+
+
+class ZipReader(object):
+    @staticmethod
+    def open(file):
+        if not zipfile.is_zipfile(file):
+            file.seek(0)
+            return file
+
+        zip = zipfile.ZipFile(file, 'r')
+        uefs = [filename for filename in zip.namelist() if os.path.splitext(filename)[1].lower() == '.uef']
+        if not uefs:
+            raise Exception('no UEF files found in ZIP archive')
+        return zip.open(uefs[0], 'r')
+
+
+class GzipReader(object):
+    @staticmethod
+    def open(file):
+        f = gzip.open(file)
+        try:
+            f.peek(2)
+            return f
+        except OSError:
+            return file
+
+
+class ChunkReader(object):
+    def __init__(self, filename):
+        self.filename = filename
+        self.encountered = set()
+        self.ignored = set()
+
+    @property
+    def chunks(self):
+        with self.open() as uef:
+            # Check the magic value, indicating it's a UEF file.
+            magic = uef.read(10)
+            if magic != b'UEF File!\x00':
+                raise Exception('{}: not a UEF file'.format(ueffile))
+
+            # Skip over the UEF version.
+            uef.read(2)
+
+            while True:
+                # Read the chunk identifier and test for EOF.
+                identifier = uef.read(2)
+                if len(identifier) == 0:
+                    break
+                identifier = unpack('<H', identifier)[0]
+
+                # Read the length and data bytes.
+                length = unpack('<I', uef.read(4))[0]
+                data = uef.read(length)
+
+                chunk = ChunkFactory.create(identifier, data)
+                if not chunk:
+                    self.ignored.add(identifier)
+                    continue
+
+                self.encountered.add(identifier)
+                yield chunk
+
+    def open(self):
+        return GzipReader.open(ZipReader.open(FileReader.open(self.filename)))
 
 
 class Cycle(object):
@@ -519,21 +567,18 @@ def parse_arguments():
 def main():
     args = parse_arguments()
 
-    recordables = []
     recorder = Recorder(args.frequency, args.bits)
-    transformer = Transformer()
 
+    reader = ChunkReader(args.ueffile)
     print(os.path.basename(args.ueffile))
-    for chunk in chunks(args.ueffile):
+    for chunk in reader.chunks:
         if args.debug:
             print(chunk)
-        recordables = transformer.transform(chunk)
         if not args.norecord:
-            for recordable in recordables:
-                recordable.record(recorder)
+            chunk.record(recorder)
 
-    print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.encountered)]))
-    print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.ignored)]))
+    print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)]))
+    print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)]))
 
     if not args.norecord:
         outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
