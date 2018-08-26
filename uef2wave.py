@@ -239,9 +239,12 @@ class PhaseChange(Recordable):
 
 class Transformer(object):
     def __init__(self):
+        self.encountered = set()
         self.ignored = set()
 
     def transform(self, chunk):
+        self.encountered.add(chunk.identifier)
+
         method = 'transform_{:04x}'.format(chunk.identifier)
         transformer = getattr(self, method, None)
         if transformer and callable(transformer):
@@ -253,7 +256,10 @@ class Transformer(object):
         return []
 
     def transform_0000(self, data):
-        print(data)
+        '''
+        Origin information chunk.
+        '''
+        print('> {}'.format(data.decode('utf-8')))
         return []
 
     def transform_0100(self, data):
@@ -302,7 +308,10 @@ class Transformer(object):
         upper, lower = unpack('<HB', data[:3])
         cycle_count = upper << 8 + lower
 
-        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle() for _, bit in zip(range(cycle_count), self.bits(data[5:]))]
+        bits = []
+        for byte in data[5:]:
+            bits.extend(self.bits(byte))
+        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle() for _, bit in zip(range(cycle_count), bits)]
 
         if recordables and data[3] == b'P':
             recordables[0] = HighPulse(recordables[0].value)
@@ -473,7 +482,7 @@ def parse_arguments():
     parser.add_argument('ueffile', help='the UEF file to convert')
     parser.add_argument('--frequency', help='the sample frequency in Hz', type=int, choices=[11025, 22050, 44100], default=44100)
     parser.add_argument('--bits', help='the sample resolution in bits', type=int, choices=[8, 16], default=16)
-    parser.add_argument('--debug', type=bool, default=False)
+    parser.add_argument('--debug', help='enable debug output', action='store_true')
     return parser.parse_args()
 
 
@@ -484,17 +493,17 @@ def main():
     recorder = Recorder(args.frequency, args.bits)
     transformer = Transformer()
     for chunk in chunks(args.ueffile):
-        recordable = transformer.transform(chunk)
         if args.debug:
             print(chunk)
+        recordable = transformer.transform(chunk)
         for r in recordable:
-            if args.debug:
-                print(r)
             r.record(recorder)
 
-    print('ignored: ' + ', '.join(['&{:04x}'.format(i) for i in transformer.ignored]))
+    print('Chunk IDs encountered ... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.encountered)]))
+    print('Chunk IDs ignored ....... ' + ', '.join(['&{:04x}'.format(i) for i in sorted(transformer.ignored)]))
 
-    with open(args.ueffile + '.wav', 'wb') as f:
+    outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
+    with open(outfile, 'wb') as f:
         recorder.write_riff(f)
 
 
