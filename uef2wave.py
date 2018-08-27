@@ -3,15 +3,12 @@
 from __future__ import print_function
 
 from argparse import ArgumentParser
-from contextlib import contextmanager
-from datetime import timedelta
 from struct import pack, unpack
 
 import gzip
 import io
 import math
 import os
-import string
 import sys
 import zipfile
 
@@ -653,11 +650,13 @@ def parse_arguments():
 
     return parser.parse_args()
 
+
 def to_mm_ss(microseconds):
     seconds = int(microseconds // 1000000)
     minutes = int(seconds // 60)
     seconds %= 60
     return '{:02d}:{:02d}'.format(minutes, seconds)
+
 
 def main():
     args = parse_arguments()
