@@ -29,7 +29,7 @@ class LowPulse(Recordable):
         return '<LowPulse {}>'.format(self.bit)
 
     def record(self, recorder):
-        recorder.low_pulse(fast=bit)
+        recorder.low_pulse(fast=self.bit)
 
 
 class HighPulse(Recordable):
@@ -40,7 +40,7 @@ class HighPulse(Recordable):
         return '<HighPulse {}>'.format(self.bit)
 
     def record(self, recorder):
-        recorder.high_pulse(fast=bit)
+        recorder.high_pulse(fast=self.bit)
 
 
 class SlowCycle(Recordable):
@@ -215,7 +215,10 @@ class Chunk(object):
 
     def __repr__(self):
         s = ' '.join('{:02x}'.format(x) for x in self.data[:10])
-        return '<Chunk &{:04x} {} bytes: {} ...>'.format(self.identifier, len(self.data), s)
+        return '<Chunk &{:04x} {} bytes: {} ...>'.format(
+            self.identifier,
+            len(self.data),
+            s)
 
 
 class Chunk0100(Chunk):
@@ -236,7 +239,8 @@ class Chunk0100(Chunk):
         if self.data[0] == ord('*'):
             filename, block = self.parse_block()
             if block == 0:
-                recorder.markers.append(Marker(recorder.microseconds, filename))
+                recorder.markers.append(
+                    Marker(recorder.microseconds, filename))
 
         super(Chunk0100, self).record(recorder)
 
@@ -302,7 +306,8 @@ class Chunk0111(Chunk):
     @property
     def recordables(self):
         length1, length2 = unpack('<HH', self.data)
-        return [Carrier(length1), StartBit()] + self.bits(0xAA) + [StopBit(), Carrier(length2)]
+        return [Carrier(length1), StartBit()] + self.bits(0xAA) + \
+            [StopBit(), Carrier(length2)]
 
 
 class Chunk0112(Chunk):
@@ -337,7 +342,8 @@ class Chunk0114(Chunk):
         bits = []
         for byte in self.data[5:]:
             bits.extend(self.bits(byte))
-        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle() for _, bit in zip(range(cycle_count), bits)]
+        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle()
+                       for _, bit in zip(range(cycle_count), bits)]
 
         if recordables and self.data[3] == b'P':
             recordables[0] = HighPulse(recordables[0].value)
@@ -389,7 +395,8 @@ class ZipReader(object):
             return file
 
         zip = zipfile.ZipFile(file, 'r')
-        uefs = [filename for filename in zip.namelist() if os.path.splitext(filename)[1].lower() == '.uef']
+        uefs = [filename for filename in zip.namelist()
+                if os.path.splitext(filename)[1].lower() == '.uef']
         if not uefs:
             raise Exception('no UEF files found in ZIP archive')
         return zip.open(uefs[0], 'r')
@@ -418,7 +425,7 @@ class ChunkReader(object):
             # Check the magic value, indicating it's a UEF file.
             magic = uef.read(10)
             if magic != b'UEF File!\x00':
-                raise Exception('{}: not a UEF file'.format(ueffile))
+                raise Exception('File is not a UEF file')
 
             # Skip over the UEF version.
             uef.read(2)
@@ -448,10 +455,11 @@ class ChunkReader(object):
 
 class Cycle(object):
     '''
-    Represents a single cycle of a given frequency and phase, sampled at a certain
-    sample frequency, number of bits, and amplitude.
+    Represents a single cycle of a given frequency and phase, sampled at a
+    certain frequency, number of bits, and amplitude.
     '''
-    def __init__(self, frequency, phase=0, sample_frequency=44100, bits=16, amplitude=1):
+    def __init__(self, frequency, phase=0, sample_frequency=44100, bits=16,
+                 amplitude=1):
         if bits == 8:
             silence_level = 127
             amplitude *= 127
@@ -564,13 +572,30 @@ class Recorder(object):
         self._microseconds += sample.pulse_duration
 
     def calculate_sines(self):
-        self._base_sine = Cycle(self._base_frequency, self._phase, self._sample_frequency, self._bits)
-        self._fast_sine = Cycle(2 * self._base_frequency, self._phase, self._sample_frequency, self._bits)
-        self._base_silence = Cycle(self._base_frequency, self._phase, self._sample_frequency, self._bits, amplitude=0)
-        self._fast_silence = Cycle(2 * self._base_frequency, self._phase, self._sample_frequency, self._bits, amplitude=0)
+        self._base_sine = Cycle(
+            self._base_frequency,
+            self._phase,
+            self._sample_frequency,
+            self._bits)
+        self._fast_sine = Cycle(
+            2 * self._base_frequency,
+            self._phase,
+            self._sample_frequency,
+            self._bits)
+        self._base_silence = Cycle(
+            self._base_frequency,
+            self._phase,
+            self._sample_frequency,
+            self._bits, amplitude=0)
+        self._fast_silence = Cycle(
+            2 * self._base_frequency,
+            self._phase,
+            self._sample_frequency,
+            self._bits, amplitude=0)
 
     def write_riff(self, stream):
         size = self._sample.tell()
+        bytes_per_sample = 1 if self._bits == 8 else 2
 
         stream.write(b'RIFF')
         stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
@@ -586,7 +611,7 @@ class Recorder(object):
         stream.write(pack('<h', 1))
         stream.write(pack('<h', 1))
         stream.write(pack('<I', self._sample_frequency))
-        stream.write(pack('<I', self._sample_frequency * (1 if self._bits == 8 else 2)))
+        stream.write(pack('<I', self._sample_frequency * bytes_per_sample))
         stream.write(pack('<h', self._bits // 8))
         stream.write(pack('<h', self._bits))
 
@@ -600,11 +625,31 @@ class Recorder(object):
 
 def parse_arguments():
     parser = ArgumentParser()
-    parser.add_argument('ueffile', help='the UEF file to convert, (g)zipped or not')
-    parser.add_argument('--frequency', help='the sample frequency in Hz (default 44100)', type=int, choices=[11025, 22050, 44100], default=44100)
-    parser.add_argument('--bits', help='the sample resolution in bits (default 16)', type=int, choices=[8, 16], default=16)
-    parser.add_argument('--debug', help='enable debug output', action='store_true')
-    parser.add_argument('--norecord', help='do not record a wave file', action='store_true')
+
+    parser.add_argument(
+        'ueffile',
+        help='the UEF file to convert, (g)zipped or not')
+    parser.add_argument(
+        '--frequency',
+        help='the sample frequency in Hz (default 44100)',
+        type=int,
+        choices=[11025, 22050, 44100],
+        default=44100)
+    parser.add_argument(
+        '--bits',
+        help='the sample resolution in bits (default 16)',
+        type=int,
+        choices=[8, 16],
+        default=16)
+    parser.add_argument(
+        '--debug',
+        help='enable debug output',
+        action='store_true')
+    parser.add_argument(
+        '--norecord',
+        help='do not record a wave file',
+        action='store_true')
+
     return parser.parse_args()
 
 def to_mm_ss(microseconds):
@@ -631,12 +676,19 @@ def main():
             chunk.record(recorder)
 
     print()
-    print('Chunk IDs encountered ... {}'.format(', '.join(['&{:04x}'.format(i) for i in sorted(reader.encountered)])))
-    print('Chunk IDs ignored ....... {}'.format(', '.join(['&{:04x}'.format(i) for i in sorted(reader.ignored)])))
-    print('Total time .............. {}'.format(to_mm_ss(recorder.microseconds)))
+    print('Chunk IDs encountered ... {}'.format(
+        ', '.join(['&{:04x}'.format(i)
+                   for i in sorted(reader.encountered)])))
+    print('Chunk IDs ignored ....... {}'.format(
+        ', '.join(['&{:04x}'.format(i)
+                   for i in sorted(reader.ignored)])))
+    print('Total time .............. {}'.format(
+        to_mm_ss(recorder.microseconds)))
     print('Markers:')
     for marker in recorder.markers:
-        print('  {} {}'.format(to_mm_ss(marker.microseconds), marker.printable))
+        print('  {} {}'.format(
+            to_mm_ss(marker.microseconds),
+            marker.printable))
 
     if not args.norecord:
         outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
