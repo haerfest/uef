@@ -174,17 +174,22 @@ class PhaseChange(Recordable):
 
 
 class Marker(object):
-    def __init__(self, microseconds, description):
+    def __init__(self, microseconds, filename, load_addr, exec_addr):
         self.microseconds = microseconds
-        self.description = description
+        self.filename = filename
+        self.load_addr = load_addr
+        self.exec_addr = exec_addr
 
     def __repr__(self):
-        return '<Marker {}" {}">'.format(
-            Marker.mm_ss(self.microseconds), self.printable)
+        return '{} {:10} {:04x} {:04x}'.format(
+            Marker.mm_ss(self.microseconds),
+            self.printable_filename,
+            self.load_addr,
+            self.exec_addr)
 
     @property
-    def printable(self):
-        return ''.join(c if ' ' <= c <= '~' else '?' for c in self.description)
+    def printable_filename(self):
+        return ''.join(c if ' ' <= c <= '~' else '?' for c in self.filename)
 
     @staticmethod
     def mm_ss(microseconds):
@@ -220,7 +225,7 @@ class Chunk(object):
 
     def __repr__(self):
         s = ' '.join('{:02x}'.format(x) for x in self.data[:10])
-        return '<Chunk &{:04x} {} bytes: {} ...>'.format(
+        return '<Chunk {:04x} {} bytes: {} ...>'.format(
             self.identifier,
             len(self.data),
             s)
@@ -242,26 +247,35 @@ class Chunk0100(Chunk):
 
     def record(self, recorder):
         if self.data[0] == ord('*'):
-            filename, block = self.parse_block()
-            if block == 0:
+            filename, load_addr, exec_addr, block_nr = self.parse_block()
+            if block_nr == 0:
                 recorder.markers.append(
-                    Marker(recorder.microseconds, filename))
+                    Marker(
+                        recorder.microseconds,
+                        filename,
+                        load_addr,
+                        exec_addr))
 
         super(Chunk0100, self).record(recorder)
 
     def parse_block(self):
         filename = ''
-        for i in range(10):
-            ascii = self.data[1 + i]
-            if ascii == 0:
-                i -= 1
+        for i in range(1, 11):
+            byte = self.data[i]
+            if byte == 0:
                 break
-            filename += chr(ascii)
-        block = unpack('<H', self.data[i + 11:i + 13])[0]
-        return filename, block
+            filename += chr(byte)
+        else:
+            i += 1
+        # Invariant: i is *at* the end-of-filename marker.
+        i += 1
+        load_addr = unpack('<HH', self.data[i:i + 4])[0]
+        exec_addr = unpack('<HH', self.data[i + 4:i + 8])[0]
+        block_nr = unpack('<H', self.data[i + 8:i + 10])[0]
+        return filename, load_addr, exec_addr, block_nr
 
     def __repr__(self):
-        return '<Chunk &0100 {} ...>'.format(self.data[:20])
+        return '<Chunk 0100 {} ...>'.format(self.data[:20])
 
 
 class Chunk0104(Chunk):
@@ -416,6 +430,7 @@ class GzipReader(object):
             f.peek(2)
             return f
         except OSError:
+            file.seek(0)
             return file
 
 
@@ -678,18 +693,16 @@ def main():
 
     print()
     print('Chunk IDs encountered ... {}'.format(
-        ', '.join(['&{:04x}'.format(i)
+        ', '.join(['{:04x}'.format(i)
                    for i in sorted(reader.encountered)])))
     print('Chunk IDs ignored ....... {}'.format(
-        ', '.join(['&{:04x}'.format(i)
+        ', '.join(['{:04x}'.format(i)
                    for i in sorted(reader.ignored)])))
     print('Total time .............. {}'.format(
         Marker.mm_ss(recorder.microseconds)))
     print('Markers:')
     for marker in recorder.markers:
-        print('  {} {}'.format(
-            Marker.mm_ss(marker.microseconds),
-            marker.printable))
+        print('  {}'.format(marker))
 
     if not args.norecord:
         outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
