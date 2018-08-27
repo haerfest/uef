@@ -249,9 +249,10 @@ class Chunk0100(Chunk):
         for i in range(10):
             ascii = self.data[1 + i]
             if ascii == 0:
+                i -= 1
                 break
             filename += chr(ascii)
-        block = unpack('<H', self.data[i + 10:i + 12])[0]
+        block = unpack('<H', self.data[i + 11:i + 13])[0]
         return filename, block
 
     def __repr__(self):
