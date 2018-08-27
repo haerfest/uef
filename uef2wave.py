@@ -179,11 +179,19 @@ class Marker(object):
         self.description = description
 
     def __repr__(self):
-        return '<Marker {}" {}">'.format(self.timestamp, self.printable)
+        return '<Marker {}" {}">'.format(
+            Marker.mm_ss(self.microseconds), self.printable)
 
     @property
     def printable(self):
         return ''.join(c if ' ' <= c <= '~' else '?' for c in self.description)
+
+    @staticmethod
+    def mm_ss(microseconds):
+        seconds = int(microseconds / 1000000)
+        minutes = int(seconds / 60)
+        seconds %= 60
+        return '{:02d}:{:02d}'.format(minutes, seconds)
 
 
 class Chunk(object):
@@ -481,7 +489,7 @@ class Cycle(object):
         '''
         Returns the duration of a single pulse in microseconds.
         '''
-        return 500000 // self._frequency
+        return 500000.0 / self._frequency
 
     @property
     def low_pulse(self):
@@ -651,13 +659,6 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def to_mm_ss(microseconds):
-    seconds = int(microseconds // 1000000)
-    minutes = int(seconds // 60)
-    seconds %= 60
-    return '{:02d}:{:02d}'.format(minutes, seconds)
-
-
 def main():
     args = parse_arguments()
 
@@ -683,11 +684,11 @@ def main():
         ', '.join(['&{:04x}'.format(i)
                    for i in sorted(reader.ignored)])))
     print('Total time .............. {}'.format(
-        to_mm_ss(recorder.microseconds)))
+        Marker.mm_ss(recorder.microseconds)))
     print('Markers:')
     for marker in recorder.markers:
         print('  {} {}'.format(
-            to_mm_ss(marker.microseconds),
+            Marker.mm_ss(marker.microseconds),
             marker.printable))
 
     if not args.norecord:
