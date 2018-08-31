@@ -684,7 +684,6 @@ def main():
     for chunk in reader.chunks:
         if args.debug:
             print(chunk)
-            print(chunk.recordables)
         else:
             print('.', end='', flush=True)
 
