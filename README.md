@@ -21,7 +21,7 @@ wave (emphasis mine):
 This makes some games fail to load on an Electron, for example:
 
 * [JetSetWilly_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Tynesoft/JetSetWilly_E.zip)
-* [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip
+* [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip)
 
 Other implementations I've checked, including the [reference one](https://github.com/TomHarte/CLK/blob/master/Storage/Tape/Formats/TapeUEF.cpp),
 treat one carrier cycle the same as a one-bit, which outputs _two_ cycles at a
