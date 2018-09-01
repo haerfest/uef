@@ -224,8 +224,8 @@ class Chunk(object):
         return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
 
     def __repr__(self):
-        s = ' '.join('{:02x}'.format(x) for x in self.data[:10])
-        return '<Chunk {:04x} {} bytes: {} ...>'.format(
+        s = ' '.join('{:02x}'.format(x) for x in self.data)
+        return '<Chunk {:04x} {} bytes: {}>'.format(
             self.identifier,
             len(self.data),
             s)
@@ -273,9 +273,6 @@ class Chunk0100(Chunk):
         exec_addr = unpack('<HH', self.data[i + 4:i + 8])[0]
         block_nr = unpack('<H', self.data[i + 8:i + 10])[0]
         return filename, load_addr, exec_addr, block_nr
-
-    def __repr__(self):
-        return '<Chunk 0100 {} ...>'.format(self.data[:20])
 
 
 class Chunk0104(Chunk):
@@ -642,49 +639,46 @@ def parse_arguments():
     parser = ArgumentParser()
 
     parser.add_argument(
+        '-f',
         '--frequency',
-        help='the sample frequency in Hz (default 44100)',
+        help='the sample frequency in Hz (default: 44100)',
         type=int,
         choices=[11025, 22050, 44100],
         default=44100)
     parser.add_argument(
+        '-b',
         '--bits',
-        help='the sample resolution in bits (default 16)',
+        help='the sample resolution in bits (default: 16)',
         type=int,
         choices=[8, 16],
         default=16)
     parser.add_argument(
-        '--debug',
-        help='enable debug output',
-        action='store_true')
-    parser.add_argument(
-        '--norecord',
-        help='do not record a wave file',
-        action='store_true')
-    parser.add_argument(
-        '--silent',
-        help='do not output any progress information',
-        action='store_true')
+        '-v',
+        '--verbose',
+        help='set the verbosity level (default: 1)',
+        type=int,
+        choices=[0, 1, 2, 3],
+        default=1)
 
     return parser.parse_args()
 
 
 def main():
     args = parse_arguments()
-
     recorder = Recorder(args.frequency, args.bits)
-
     reader = ChunkReader(sys.stdin.buffer)
+
     for chunk in reader.chunks:
-        if args.debug:
+        if args.verbose >= 2:
             print(chunk, file=sys.stderr)
-        elif not args.silent:
+            if args.verbose >= 3:
+                print(chunk.recordables, file=sys.stderr)
+        elif args.verbose >= 1:
             print('.', end='', flush=True, file=sys.stderr)
 
-        if not args.norecord:
-            chunk.record(recorder)
+        chunk.record(recorder)
 
-    if not args.silent:
+    if args.verbose >= 1:
         print(file=sys.stderr)
         print('Chunk IDs encountered ... {}'.format(
             ', '.join(['{:04x}'.format(i)
@@ -701,8 +695,7 @@ def main():
         for marker in recorder.markers:
             print('  {}'.format(marker), file=sys.stderr)
 
-    if not args.norecord:
-        recorder.write_riff(sys.stdout.buffer)
+    recorder.write_riff(sys.stdout.buffer)
 
 
 if __name__ == '__main__':
