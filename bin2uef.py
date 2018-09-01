@@ -63,7 +63,7 @@ def main():
         block_flag = 0x80 if j == len(data) else 0
 
         # construct data header
-        header = str.encode(args.name[:10].upper())
+        header = str.encode(args.name[:10])
         header += pack('<BIIHHBI', 0, args.load_addr, args.exec_addr, block_nr,
                        len(block), block_flag, 0)
 
