@@ -46,20 +46,16 @@ Use `--help` to show help information:
 
 ```
 $ python3 uef2wave.py --help
-usage: uef2wave.py [-h] [--frequency {11025,22050,44100}] [--bits {8,16}]
-                   [--debug] [--norecord]
-                   ueffile
-
-positional arguments:
-  ueffile               the UEF file to convert, (g)zipped or not
+usage: uef2wave.py [-h] [-f {11025,22050,44100}] [-b {8,16}] [-v {0,1,2,3}]
 
 optional arguments:
   -h, --help            show this help message and exit
-  --frequency {11025,22050,44100}
-                        the sample frequency in Hz (default 44100)
-  --bits {8,16}         the sample resolution in bits (default 16)
-  --debug               enable debug output
-  --norecord            do not record a wave file
+  -f {11025,22050,44100}, --frequency {11025,22050,44100}
+                        the sample frequency in Hz (default: 44100)
+  -b {8,16}, --bits {8,16}
+                        the sample resolution in bits (default: 16)
+  -v {0,1,2,3}, --verbose {0,1,2,3}
+                        set the verbosity level (default: 1)
 ```
 
 Since UEF files are often gzipped, and [Stairway To Hell](https://www.stairwaytohell.com)
@@ -69,8 +65,7 @@ such files. In case of a `.zip` file, the first `.uef` inside is processed.
 Example:
 
 ```
-$ python3 uef2wave.py Elite_E.zip
-Elite_E.zip
+$ python3 uef2wave.py < Elite_E.zip > Elite_E.wav
 ................................................................................
 ................................................................................
 ....................................................
@@ -84,8 +79,10 @@ Markers:
   04:53 V1
 ```
 
-It prints which chunks it encountered and which one it ignored, which is really
-just for me to debug new UEF files.
+By default it prints which chunks it encountered and which ones, if any, it
+ignored, which is really just for me to debug new UEF files. You can silence
+it by passing along `--verbose 0`, or even output further debug information
+by trying one of the higher verbosity levels.
 
 It also prints out a list of files in the tape image and the timestamps of their
 first data blocks, which is useful when virtually "rewinding" the tape.
