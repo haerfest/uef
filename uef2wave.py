@@ -401,12 +401,6 @@ class ChunkFactory(object):
         return class_(identifier, data) if class_ else None
 
 
-class FileReader(object):
-    @staticmethod
-    def open(filename):
-        return open(filename, 'rb')
-
-
 class ZipReader(object):
     @staticmethod
     def open(file):
@@ -435,8 +429,8 @@ class GzipReader(object):
 
 
 class ChunkReader(object):
-    def __init__(self, filename):
-        self.filename = filename
+    def __init__(self, stream):
+        self.stream = stream
         self.encountered = set()
         self.ignored = set()
 
@@ -471,7 +465,7 @@ class ChunkReader(object):
                 yield chunk
 
     def open(self):
-        return GzipReader.open(ZipReader.open(FileReader.open(self.filename)))
+        return GzipReader.open(ZipReader.open(io.BytesIO(self.stream.read())))
 
 
 class Cycle(object):
@@ -614,42 +608,39 @@ class Recorder(object):
             self._sample_frequency,
             self._bits, amplitude=0)
 
-    def write_riff(self, fd):
+    def write_riff(self, stream):
         size = self._sample.tell()
         bytes_per_sample = 1 if self._bits == 8 else 2
 
-        os.write(fd, b'RIFF')
-        os.write(fd, pack('<I', 4 + 8 + 16 + 8 + size))
+        stream.write(b'RIFF')
+        stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
 
         # 4 bytes
-        os.write(fd, b'WAVE')
+        stream.write(b'WAVE')
 
         # 8 bytes
-        os.write(fd, b'fmt ')
-        os.write(fd, pack('<I', 16))
+        stream.write(b'fmt ')
+        stream.write(pack('<I', 16))
 
         # 16 bytes
-        os.write(fd, pack('<h', 1))
-        os.write(fd, pack('<h', 1))
-        os.write(fd, pack('<I', self._sample_frequency))
-        os.write(fd, pack('<I', self._sample_frequency * bytes_per_sample))
-        os.write(fd, pack('<h', self._bits // 8))
-        os.write(fd, pack('<h', self._bits))
+        stream.write(pack('<h', 1))
+        stream.write(pack('<h', 1))
+        stream.write(pack('<I', self._sample_frequency))
+        stream.write(pack('<I', self._sample_frequency * bytes_per_sample))
+        stream.write(pack('<h', self._bits // 8))
+        stream.write(pack('<h', self._bits))
 
         # 8 bytes
-        os.write(fd, b'data')
-        os.write(fd, pack('<I', size))
+        stream.write(b'data')
+        stream.write(pack('<I', size))
 
         # size bytes
-        os.write(fd, self._sample.getbuffer())
+        stream.write(self._sample.getbuffer())
 
 
 def parse_arguments():
     parser = ArgumentParser()
 
-    parser.add_argument(
-        'ueffile',
-        help='the UEF file to convert, (g)zipped or not')
     parser.add_argument(
         '--frequency',
         help='the sample frequency in Hz (default 44100)',
@@ -670,6 +661,10 @@ def parse_arguments():
         '--norecord',
         help='do not record a wave file',
         action='store_true')
+    parser.add_argument(
+        '--silent',
+        help='do not output any progress information',
+        action='store_true')
 
     return parser.parse_args()
 
@@ -679,35 +674,35 @@ def main():
 
     recorder = Recorder(args.frequency, args.bits)
 
-    reader = ChunkReader(args.ueffile)
-    print(os.path.basename(args.ueffile), file=sys.stderr)
+    reader = ChunkReader(sys.stdin.buffer)
     for chunk in reader.chunks:
         if args.debug:
             print(chunk, file=sys.stderr)
-        else:
+        elif not args.silent:
             print('.', end='', flush=True, file=sys.stderr)
 
         if not args.norecord:
             chunk.record(recorder)
 
-    print(file=sys.stderr)
-    print('Chunk IDs encountered ... {}'.format(
-        ', '.join(['{:04x}'.format(i)
-                   for i in sorted(reader.encountered)])),
-        file=sys.stderr)
-    print('Chunk IDs ignored ....... {}'.format(
-        ', '.join(['{:04x}'.format(i)
-                   for i in sorted(reader.ignored)])),
-        file=sys.stderr)
-    print('Total time .............. {}'.format(
-        Marker.mm_ss(recorder.microseconds)),
-        file=sys.stderr)
-    print('Markers:', file=sys.stderr)
-    for marker in recorder.markers:
-        print('  {}'.format(marker), file=sys.stderr)
+    if not args.silent:
+        print(file=sys.stderr)
+        print('Chunk IDs encountered ... {}'.format(
+            ', '.join(['{:04x}'.format(i)
+                       for i in sorted(reader.encountered)])),
+              file=sys.stderr)
+        print('Chunk IDs ignored ....... {}'.format(
+            ', '.join(['{:04x}'.format(i)
+                       for i in sorted(reader.ignored)])),
+              file=sys.stderr)
+        print('Total time .............. {}'.format(
+            Marker.mm_ss(recorder.microseconds)),
+            file=sys.stderr)
+        print('Markers:', file=sys.stderr)
+        for marker in recorder.markers:
+            print('  {}'.format(marker), file=sys.stderr)
 
     if not args.norecord:
-        recorder.write_riff(sys.stdout.fileno())
+        recorder.write_riff(sys.stdout.buffer)
 
 
 if __name__ == '__main__':
