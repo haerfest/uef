@@ -614,34 +614,34 @@ class Recorder(object):
             self._sample_frequency,
             self._bits, amplitude=0)
 
-    def write_riff(self, stream):
+    def write_riff(self, fd):
         size = self._sample.tell()
         bytes_per_sample = 1 if self._bits == 8 else 2
 
-        stream.write(b'RIFF')
-        stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
+        os.write(fd, b'RIFF')
+        os.write(fd, pack('<I', 4 + 8 + 16 + 8 + size))
 
         # 4 bytes
-        stream.write(b'WAVE')
+        os.write(fd, b'WAVE')
 
         # 8 bytes
-        stream.write(b'fmt ')
-        stream.write(pack('<I', 16))
+        os.write(fd, b'fmt ')
+        os.write(fd, pack('<I', 16))
 
         # 16 bytes
-        stream.write(pack('<h', 1))
-        stream.write(pack('<h', 1))
-        stream.write(pack('<I', self._sample_frequency))
-        stream.write(pack('<I', self._sample_frequency * bytes_per_sample))
-        stream.write(pack('<h', self._bits // 8))
-        stream.write(pack('<h', self._bits))
+        os.write(fd, pack('<h', 1))
+        os.write(fd, pack('<h', 1))
+        os.write(fd, pack('<I', self._sample_frequency))
+        os.write(fd, pack('<I', self._sample_frequency * bytes_per_sample))
+        os.write(fd, pack('<h', self._bits // 8))
+        os.write(fd, pack('<h', self._bits))
 
         # 8 bytes
-        stream.write(b'data')
-        stream.write(pack('<I', size))
+        os.write(fd, b'data')
+        os.write(fd, pack('<I', size))
 
         # size bytes
-        stream.write(self._sample.getbuffer())
+        os.write(fd, self._sample.getbuffer())
 
 
 def parse_arguments():
@@ -680,33 +680,34 @@ def main():
     recorder = Recorder(args.frequency, args.bits)
 
     reader = ChunkReader(args.ueffile)
-    print(os.path.basename(args.ueffile))
+    print(os.path.basename(args.ueffile), file=sys.stderr)
     for chunk in reader.chunks:
         if args.debug:
-            print(chunk)
+            print(chunk, file=sys.stderr)
         else:
-            print('.', end='', flush=True)
+            print('.', end='', flush=True, file=sys.stderr)
 
         if not args.norecord:
             chunk.record(recorder)
 
-    print()
+    print(file=sys.stderr)
     print('Chunk IDs encountered ... {}'.format(
         ', '.join(['{:04x}'.format(i)
-                   for i in sorted(reader.encountered)])))
+                   for i in sorted(reader.encountered)])),
+        file=sys.stderr)
     print('Chunk IDs ignored ....... {}'.format(
         ', '.join(['{:04x}'.format(i)
-                   for i in sorted(reader.ignored)])))
+                   for i in sorted(reader.ignored)])),
+        file=sys.stderr)
     print('Total time .............. {}'.format(
-        Marker.mm_ss(recorder.microseconds)))
-    print('Markers:')
+        Marker.mm_ss(recorder.microseconds)),
+        file=sys.stderr)
+    print('Markers:', file=sys.stderr)
     for marker in recorder.markers:
-        print('  {}'.format(marker))
+        print('  {}'.format(marker), file=sys.stderr)
 
     if not args.norecord:
-        outfile = os.path.splitext(os.path.basename(args.ueffile))[0] + '.wav'
-        with open(outfile, 'wb') as f:
-            recorder.write_riff(f)
+        recorder.write_riff(sys.stdout.fileno())
 
 
 if __name__ == '__main__':
