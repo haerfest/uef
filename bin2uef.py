@@ -20,12 +20,14 @@ def crc(bytes):
 
 def parse_args():
     parser = ArgumentParser()
-    parser.add_argument('-n', '--name', help='filename of binary',
+    parser.add_argument('-n', '--name',
+                        help='name to record on tape (default: FILE)',
                         default='FILE')
-    parser.add_argument('-l', '--load_addr', help='load address of binary',
-                        default='0x2000')
-    parser.add_argument('-e', '--exec_addr',
-                        help='execution address of binary')
+    parser.add_argument('-l', '--load', metavar='ADDRESS', dest='load_addr',
+                        help='load address (prepend 0x for hex)',
+                        required=True)
+    parser.add_argument('-e', '--exec', metavar='ADDRESS', dest='exec_addr',
+                        help='execution address (prepend 0x for hex)')
     args = parser.parse_args()
 
     args.exec_addr = args.exec_addr or args.load_addr
