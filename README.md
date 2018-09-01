@@ -1,7 +1,10 @@
 # UEF
 
-Contains a Python 3 scripts to assist working with [UEF](https://en.wikipedia.org/wiki/Unified_Emulator_Format)
-files, which are tape images of 8-bit Acorn microcomputers.
+Contains Python 3 scripts to assist working with [UEF](https://en.wikipedia.org/wiki/Unified_Emulator_Format)
+files, which are tape images of 8-bit Acorn microcomputers:
+
+* `uef2wave`
+* `bin2uef`
 
 ## `uef2wave`
 
@@ -151,15 +154,15 @@ message:
   .byte 0
 ```
 
-Then execute from a command-line, specifying a name to appear on the tape as
-well as the right load address:
+Then execute the following from a command-line, specifying a name to appear on
+the tape (`-n`), as well as the correct load address (`-l`):
 
 ```
 $ xa hello.asm -o - | python bin2uef.py -n HELLO -l 0x2000 | python uef2wav.py > hello.wav
 ```
 
-On your Acorn micro, load the UEF file, which you play back through the line
-out of your Mac or PC, and run it:
+On your Acorn micro, load the `hello.wav` file, which you play back through the
+line out of your Mac or PC, and run it:
 
 ```
 > *LOAD "HELLO"
