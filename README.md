@@ -1,27 +1,30 @@
 # UEF
 
-Contains a Python 3 script to convert tape images of 8-bit Acorn microcomputers
-to `.wav` files. With the appropriate cable you can play these back on your Mac
-or PC and load them via the cassette interface on your Acorn. I test on an
-Electron.
+Contains a Python 3 scripts to assist working with [UEF](https://en.wikipedia.org/wiki/Unified_Emulator_Format)
+files, which are tape images of 8-bit Acorn microcomputers.
 
-The tape images should be in [UEF](https://en.wikipedia.org/wiki/Unified_Emulator_Format)
-format.
+## `uef2wave`
 
-You can [read its specification](http://electrem.emuunlim.com/UEFSpecs.htm), but
-note there seems to be a small mistake with the description of the carrier wave
-(emphasis mine):
+Convert UEF files to audible `.wav` files. With the appropriate cable you can
+play these back on your Mac or PC and load them via the cassette interface on
+your Acorn.
+
+You can read the [UEF specification](http://electrem.emuunlim.com/UEFSpecs.htm),
+but note there seems to be a small mistake with the description of the carrier
+wave (emphasis mine):
 
 > output a **single** cycle at twice the current base frequency
 
-This makes some games fail to load on an Electron, notably [JetSetWilly_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Tynesoft/JetSetWilly_E.zip)
-and [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip).
+This makes some games fail to load on an Electron, for example:
+
+* [JetSetWilly_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Tynesoft/JetSetWilly_E.zip)
+* [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip
 
 Other implementations I've checked, including the [reference one](https://github.com/TomHarte/CLK/blob/master/Storage/Tape/Formats/TapeUEF.cpp),
 treat one carrier cycle the same as a one-bit, which outputs _two_ cycles at a
 time. With that fix in place, the above games load successfully.
 
-## Supported chunks
+### Supported chunks
 
 The following UEF chunks are supported:
 
@@ -36,11 +39,11 @@ Chunk  | Description
 `0114` | Security cycles.
 `0116` | Floating point gap.
 
-## Dependencies
+### Dependencies
 
 A vanilla Python 3.x.x. Tested on Mac OS X High Sierra with Python 3.6.5.
 
-## Usage
+### Usage
 
 Use `--help` to show help information:
 
@@ -57,6 +60,9 @@ optional arguments:
   -v {0,1,2,3}, --verbose {0,1,2,3}
                         set the verbosity level (default: 1)
 ```
+
+The script reads the UEF file contents from standard input, and writes the
+generated `.wav` to standard output.
 
 Since UEF files are often gzipped, and [Stairway To Hell](https://www.stairwaytohell.com)
 carries `.zip` files containing gzipped `.uef` files, you can pass along any of
@@ -87,8 +93,82 @@ by trying one of the higher verbosity levels.
 It also prints out a list of files in the tape image and the timestamps of their
 first data blocks, which is useful when virtually "rewinding" the tape.
 
-## Shoutout
+### Shoutout
 
 For far more convenience, check out [PlayUEF](http://www.8bitkick.cc/playuef.html),
 which allows you to play back audio recordings of various games using nothing
 but your browser.
+
+## `bin2uef`
+
+This is a simple script to store a binary file onto a UEF file, which you may
+subsequently load into your Acorn micro using `uef2wave`.
+
+### Usage
+
+```
+python3 bin2uef.py --help
+usage: bin2uef.py [-h] [-n NAME] -l ADDRESS [-e ADDRESS]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -n NAME, --name NAME  name to record on tape (default: FILE)
+  -l ADDRESS, --load ADDRESS
+                        load address (prepend 0x for hex)
+  -e ADDRESS, --exec ADDRESS
+                        execution address (prepend 0x for hex)
+```
+
+The script reads the file contents from standard input and writes the UEF file
+to standard output. This way you can easily chain it with `uef2wave`, should you
+wish.
+
+### Example
+
+Using the [xa65](http://www.floodgap.com/retrotech/xa/) 6502 assembler, you can
+write some machine code and have it execute on your Acorn micro as follows.
+
+Save the following file as `hello.asm`:
+
+```
+  oswrch = $ffee
+
+  * = $2000
+
+  ldx #0
+loop: 
+  lda message,x
+  beq done
+  jsr oswrch
+  inx
+  jmp loop
+  
+done:
+  rts
+
+message:
+  .asc "Hello, world!"
+  .byte 0
+```
+
+Then execute from a command-line, specifying a name to appear on the tape as
+well as the right load address:
+
+```
+$ xa hello.asm -o - | python bin2uef.py -n HELLO -l 0x2000 | python uef2wav.py > hello.wav
+```
+
+On your Acorn micro, load the UEF file, which you play back through the line
+out of your Mac or PC, and run it:
+
+```
+> *LOAD "HELLO"
+Searching
+
+Loading
+
+HELLO      00 001D
+
+> CALL &2000
+Hello, world!
+```
