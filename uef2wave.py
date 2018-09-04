@@ -1,702 +1,180 @@
 #!/usr/bin/env python
 
-from __future__ import print_function
-
-from argparse import ArgumentParser
+from functools import reduce
+from math import pi, radians, sin
+from operator import xor
 from struct import pack, unpack
 
 import gzip
 import io
-import math
 import os
 import sys
 import zipfile
 
 
-class Recordable(object):
-    def record(self, recorder):
-        raise Exception('{}; record() not implemented'.format(type(self)))
-
-
-class LowPulse(Recordable):
-    def __init__(self, bit):
-        self.bit = bit
-
-    def __repr__(self):
-        return '<LowPulse {}>'.format(self.bit)
-
-    def record(self, recorder):
-        recorder.low_pulse(fast=self.bit)
-
-
-class HighPulse(Recordable):
-    def __init__(self, bit):
-        self.bit = bit
-
-    def __repr__(self):
-        return '<HighPulse {}>'.format(self.bit)
-
-    def record(self, recorder):
-        recorder.high_pulse(fast=self.bit)
-
-
-class SlowCycle(Recordable):
-    '''
-    Represents a single slow cycle.
-    '''
-    def __repr__(self):
-        return '<SlowCycle>'
-
-    def record(self, recorder):
-        recorder.low_pulse()
-        recorder.high_pulse()
-
-
-class FastCycle(Recordable):
-    '''
-    Represents a single fast cycle.
-    '''
-    def __repr__(self):
-        return '<FastCycle>'
-
-    def record(self, recorder):
-        recorder.low_pulse(fast=True)
-        recorder.high_pulse(fast=True)
-
-
-class ZeroBit(SlowCycle):
-    '''
-    Represents a zero-bit.
-    '''
-    def __repr__(self):
-        return '0'
-
-
-class OneBit(Recordable):
-    '''
-    Represents a one-bit.
-    '''
-    def __repr__(self):
-        return '1'
-
-    def record(self, recorder):
-        recorder.low_pulse(fast=True)
-        recorder.high_pulse(fast=True)
-        recorder.low_pulse(fast=True)
-        recorder.high_pulse(fast=True)
-
-
-class StartBit(ZeroBit):
-    '''
-    Represents a start bit.
-    '''
-    def __repr__(self):
-        return '<StartBit>'
-
-
-class StopBit(OneBit):
-    '''
-    Represents a stop bit.
-    '''
-    def __repr__(self):
-        return '<StopBit>'
-
-
-class Carrier(Recordable):
-    '''
-    Represents a carrier tone of a certain cycle count.
-    '''
-    def __init__(self, cycle_count):
-        self.cycle_count = cycle_count
-
-    def __repr__(self):
-        return '<Carrier {} cycles>'.format(self.cycle_count)
-
-    def record(self, recorder):
-        for _ in range(self.cycle_count):
-            recorder.low_pulse(fast=True)
-            recorder.high_pulse(fast=True)
-
-            # According to the UEF spec only 'cycle_count' fast cycles
-            # should be written, but some tapes don't load this way
-            # (e.g. JetSetWilly_E.zip and Hopper-PIASRR_E).
-            recorder.low_pulse(fast=True)
-            recorder.high_pulse(fast=True)
-
-
-class IntegerGap(Recordable):
-    def __init__(self, cycle_count):
-        self.cycle_count = cycle_count
-
-    def __repr__(self):
-        return '<IntegerGap {} cycles>'.format(self.cycle_count)
-
-    def record(self, recorder):
-        for _ in range(self.cycle_count):
-            recorder.low_pulse(fast=True, silent=True)
-            recorder.high_pulse(fast=True, silent=True)
-
-
-class FloatGap(Recordable):
-    def __init__(self, seconds):
-        self.seconds = seconds
-
-    def __repr__(self):
-        return '<FloatGap {:.1f} sec>'.format(self.seconds)
-
-    def record(self, recorder):
-        cycle_count = int(self.seconds * 2 * recorder.base_frequency)
-        for _ in range(cycle_count):
-            recorder.low_pulse(fast=True, silent=True)
-            recorder.high_pulse(fast=True, silent=True)
-
-
-class BaseFrequencyChange(Recordable):
-    def __init__(self, frequency):
-        self.frequency = frequency
-
-    def __repr__(self):
-        return '<BaseFrequencyChange {:.1f} Hz>'.format(self.frequency)
-
-    def record(self, recorder):
-        recorder.base_frequency = self.frequency
-
-
-class PhaseChange(Recordable):
-    def __init__(self, phase):
-        self.phase = phase
-
-    def __repr__(self):
-        return '<PhaseChange {} deg>'.format(self.phase)
-
-    def record(self, recorder):
-        recorder.phase = self.phase
-
-
-class Marker(object):
-    def __init__(self, microseconds, filename, load_addr, exec_addr):
-        self.microseconds = microseconds
-        self.filename = filename
-        self.load_addr = load_addr
-        self.exec_addr = exec_addr
-
-    def __repr__(self):
-        return '{} {:10} {:04x} {:04x}'.format(
-            Marker.mm_ss(self.microseconds),
-            self.printable_filename,
-            self.load_addr,
-            self.exec_addr)
-
-    @property
-    def printable_filename(self):
-        return ''.join(c if ' ' <= c <= '~' else '?' for c in self.filename)
-
-    @staticmethod
-    def mm_ss(microseconds):
-        seconds = int(microseconds / 1000000)
-        minutes = int(seconds / 60)
-        seconds %= 60
-        return '{:02d}:{:02d}'.format(minutes, seconds)
-
-
-class Chunk(object):
-    '''
-    Base chunk representation. Keeps track of its identifier and data, and
-    specifies an interface for other chunks to turn themselves into a sequence
-    of Recordables for recording on a Recorder.
-    '''
-    def __init__(self, identifier, data):
-        self.identifier = identifier
-        self.data = data
-
-    @property
-    def recordables(self):
-        return []
-
-    def record(self, recorder):
-        for recordable in self.recordables:
-            recordable.record(recorder)
-
-    def bits(self, byte):
-        '''
-        Helper method to turn a byte into a sequence of recordable bits.
-        '''
-        return [OneBit() if byte & (1 << i) else ZeroBit() for i in range(8)]
-
-    def __repr__(self):
-        s = ' '.join('{:02x}'.format(x) for x in self.data)
-        return '<Chunk {:04x} {} bytes: {}>'.format(
-            self.identifier,
-            len(self.data),
-            s)
-
-
-class Chunk0100(Chunk):
-    '''
-    Implicit start/stop bit tape data block.
-    '''
-    @property
-    def recordables(self):
-        recordables = []
-        for byte in self.data:
-            recordables.append(StartBit())
-            recordables.extend(self.bits(byte))
-            recordables.append(StopBit())
-
-        return recordables
-
-    def record(self, recorder):
-        if self.data[0] == ord('*'):
-            filename, load_addr, exec_addr, block_nr = self.parse_block()
-            if block_nr == 0:
-                recorder.markers.append(
-                    Marker(
-                        recorder.microseconds,
-                        filename,
-                        load_addr,
-                        exec_addr))
-
-        super(Chunk0100, self).record(recorder)
-
-    def parse_block(self):
-        filename = ''
-        for i in range(1, 11):
-            byte = self.data[i]
-            if byte == 0:
-                break
-            filename += chr(byte)
-        else:
-            i += 1
-        # Invariant: i is *at* the end-of-filename marker.
-        i += 1
-        load_addr = unpack('<HH', self.data[i:i + 4])[0]
-        exec_addr = unpack('<HH', self.data[i + 4:i + 8])[0]
-        block_nr = unpack('<H', self.data[i + 8:i + 10])[0]
-        return filename, load_addr, exec_addr, block_nr
-
-
-class Chunk0104(Chunk):
-    '''
-    Defined tape format data block.
-    '''
-    @property
-    def recordables(self):
-        data_bit_count, parity, stop_bit_count = unpack('<Bcb', self.data[:3])
-
-        recordables = []
-        for byte in self.data[3:]:
-            recordables.append(StartBit())
-
-            bits = self.bits(byte)[:data_bit_count]
-            recordables.extend(bits)
-
-            odd_parity = False
-            for bit in bits:
-                odd_parity ^= isinstance(bit, OneBit)
-            if parity == b'E':
-                recordables.append(OneBit() if odd_parity else ZeroBit())
-            elif parity == b'O':
-                recordables.append(ZeroBit() if odd_parity else OneBit())
-
-            recordables.extend([StopBit()] * abs(stop_bit_count))
-
-            if stop_bit_count < 0:
-                recordables.append(FastCycle())
-
-        return recordables
-
-
-class Chunk0110(Chunk):
-    '''
-    Carrier tone.
-    '''
-    @property
-    def recordables(self):
-        cycle_count = unpack('<H', self.data)[0]
-        return [Carrier(cycle_count)]
-
-
-class Chunk0111(Chunk):
-    '''
-    Carrier tone with dummy byte.
-    '''
-    @property
-    def recordables(self):
-        length1, length2 = unpack('<HH', self.data)
-        return [Carrier(length1), StartBit()] + self.bits(0xAA) + \
-            [StopBit(), Carrier(length2)]
-
-
-class Chunk0112(Chunk):
-    '''
-    Integer gap.
-    '''
-    @property
-    def recordables(self):
-        n = unpack('<H', self.data)[0]
-        return [IntegerGap(n)]
-
-
-class Chunk0113(Chunk):
-    '''
-    Change of base frequency.
-    '''
-    @property
-    def recordables(self):
-        frequency = unpack('<f', self.data)[0]
-        return [BaseFrequencyChange(frequency)]
-
-
-class Chunk0114(Chunk):
-    '''
-    Security cycles.
-    '''
-    @property
-    def recordables(self):
-        upper, lower = unpack('<HB', self.data[:3])
-        cycle_count = upper << 8 + lower
-
-        bits = []
-        for byte in self.data[5:]:
-            bits.extend(self.bits(byte))
-        recordables = [FastCycle() if isinstance(bit, OneBit) else SlowCycle()
-                       for _, bit in zip(range(cycle_count), bits)]
-
-        if recordables and self.data[3] == b'P':
-            recordables[0] = HighPulse(recordables[0].value)
-        if recordables and self.data[4] == b'P':
-            recordables[-1] = LowPulse(recordables[-1].value)
-
-        return recordables
-
-
-class Chunk0115(Chunk):
-    '''
-    Phase change.
-    '''
-    @property
-    def recordables(self):
-        phase = unpack('<H', self.data)[0]
-        return [PhaseChange(phase)]
-
-
-class Chunk0116(Chunk):
-    '''
-    Floating point gap.
-    '''
-    @property
-    def recordables(self):
-        seconds = unpack('<f', self.data)[0]
-        return [FloatGap(seconds)]
-
-
-class ChunkFactory(object):
-    @staticmethod
-    def create(identifier, data):
-        class_name = 'Chunk{:04x}'.format(identifier)
-        class_ = getattr(sys.modules[__name__], class_name, None)
-        return class_(identifier, data) if class_ else None
-
-
-class ZipReader(object):
-    @staticmethod
-    def open(file):
-        if not zipfile.is_zipfile(file):
-            file.seek(0)
-            return file
-
-        zip = zipfile.ZipFile(file, 'r')
-        uefs = [filename for filename in zip.namelist()
-                if os.path.splitext(filename)[1].lower() == '.uef']
-        if not uefs:
-            raise Exception('no UEF files found in ZIP archive')
-        return zip.open(uefs[0], 'r')
-
-
-class GzipReader(object):
-    @staticmethod
-    def open(file):
+def open_zip(file):
+    if not zipfile.is_zipfile(file):
+        file.seek(0)
+        return file
+    zip = zipfile.ZipFile(file, 'r')
+    uefs = [filename for filename in zip.namelist()
+            if os.path.splitext(filename)[1].lower() == '.uef']
+    assert uefs
+    return zip.open(uefs[0], 'r')
+
+
+def open_gzip(file):
+    try:
         f = gzip.open(file)
-        try:
-            f.peek(2)
-            return f
-        except OSError:
-            file.seek(0)
-            return file
+        f.peek(6)
+        return f
+    except OSError:
+        file.seek(0)
+        return file
 
 
-class ChunkReader(object):
-    def __init__(self, stream):
-        self.stream = stream
-        self.encountered = set()
-        self.ignored = set()
-
-    @property
-    def chunks(self):
-        with self.open() as uef:
-            # Check the magic value, indicating it's a UEF file.
-            magic = uef.read(10)
-            if magic != b'UEF File!\x00':
-                raise Exception('File is not a UEF file')
-
-            # Skip over the UEF version.
-            uef.read(2)
-
-            while True:
-                # Read the chunk identifier and test for EOF.
-                identifier = uef.read(2)
-                if len(identifier) == 0:
-                    break
-                identifier = unpack('<H', identifier)[0]
-
-                # Read the length and data bytes.
-                length = unpack('<I', uef.read(4))[0]
-                data = uef.read(length)
-
-                chunk = ChunkFactory.create(identifier, data)
-                if not chunk:
-                    self.ignored.add(identifier)
-                    continue
-
-                self.encountered.add(identifier)
-                yield chunk
-
-    def open(self):
-        return GzipReader.open(ZipReader.open(io.BytesIO(self.stream.read())))
+def open_uef(stream):
+    return open_gzip(open_zip(io.BytesIO(stream.read())))
 
 
-class Cycle(object):
-    '''
-    Represents a single cycle of a given frequency and phase, sampled at a
-    certain frequency, number of bits, and amplitude.
-    '''
-    def __init__(self, frequency, phase=0, sample_frequency=44100, bits=16,
-                 amplitude=1):
-        if bits == 8:
-            silence_level = 127
-            amplitude *= 127
-        else:
-            silence_level = 0
-            amplitude *= 32767
-
-        self._frequency = frequency
-        self._bits = bits
-        self._phase = phase
-
-        self._samples = []
-        self._sample_count = math.ceil(sample_frequency // frequency)
-
-        for t in range(self._sample_count):
-            y = math.sin(phase + 2 * math.pi * t / self._sample_count)
-            self._samples.append(math.trunc(silence_level + amplitude * y))
-
-    @property
-    def pulse_duration(self):
-        '''
-        Returns the duration of a single pulse in microseconds.
-        '''
-        return 500000.0 / self._frequency
-
-    @property
-    def low_pulse(self):
-        i = 0
-        j = self._sample_count // 2
-        return b''.join(self.pack(y) for y in self._samples[i:j])
-
-    @property
-    def high_pulse(self):
-        i = self._sample_count // 2
-        j = self._sample_count
-        return b''.join(self.pack(y) for y in self._samples[i:j])
-
-    def pack(self, y):
-        return pack('<B', y) if self._bits == 8 else pack('<h', y)
+def as_bits(byte):
+    return [1 if byte & (1 << i) else 0 for i in range(8)]
 
 
-class Recorder(object):
-    def __init__(self, frequency=44100, bits=16):
-        self._sample = io.BytesIO()
-        self._sample_frequency = frequency
-        self._bits = bits
+def read_chunks(stream):
+    frequency = 1200
+    phase = radians(180)
 
-        self._base_frequency = 1200.0
-        self._phase = math.radians(180)
+    def sample(freq, ph0, ph1, amp=32767):
+        n = int(round(44100 * (ph1 - ph0) / (2 * pi) // freq))
+        points = [amp * sin(phase + ph0 + 2 * pi * freq * t / 44100)
+                  for t in range(n)]
+        fmt = '<' + 'h' * n
+        return pack(fmt, *[int(p) for p in points])
 
-        self._base_sine = None
-        self._fast_sine = None
-        self._base_silence = None
-        self._fast_silence = None
-        self._recalculate = True
+    def wave(x):
+        if x == 'SL':  # Slow Low pulse.
+            return sample(frequency, 0, pi)
 
-        self._microseconds = 0
-        self._markers = []
+        if x == 'SH':  # Slow High pulse.
+            return sample(frequency, pi, 2 * pi)
 
-    @property
-    def markers(self):
-        return self._markers
+        if x == 'FL':  # Fast Low pulse.
+            return sample(2 * frequency, 0, pi)
 
-    @property
-    def microseconds(self):
-        return self._microseconds
+        if x == 'FH':  # Fast High pulse.
+            return sample(2 * frequency, pi, 2 * pi)
 
-    def set_base_frequency(self, frequency):
-        self._base_frequency = frequency
-        self._recalculate = True
+        if x == 'SC':  # Slow Cycle.
+            return sample(frequency, 0, 2 * pi)
 
-    def get_base_frequency(self):
-        return self._base_frequency
+        if x == 'FC':  # Fast Cycle.
+            return sample(2 * frequency, 0, 2 * pi)
 
-    base_frequency = property(get_base_frequency, set_base_frequency)
+        if x == 1:  # 1-bit
+            return sample(2 * frequency, 0, 4 * pi)
 
-    def set_phase(self, phase):
-        self._phase = math.radians(phase)
-        self._recalculate = True
+        if x == 0:  # 0-bit
+            return sample(frequency, 0, 2 * pi)
 
-    def get_phase(self):
-        return self._phase
+        if x == '.':  # Silence.
+            return sample(frequency, 0, 2 * pi, 0)
 
-    phase = property(get_phase, set_phase)
+    data = io.BytesIO()
+    with open_uef(stream) as uef:
+        assert uef.read(10) == b'UEF File!\x00'
+        uef.read(2)
+        while True:
+            header = uef.read(6)
+            if len(header) == 0:
+                break
 
-    def low_pulse(self, fast=False, silent=False):
-        if self._recalculate:
-            self.calculate_sines()
-            self._recalculate = False
+            identifier, length = unpack('<HI', header)
+            chunk = uef.read(length)
 
-        if fast:
-            sample = self._fast_silence if silent else self._fast_sine
-        else:
-            sample = self._base_silence if silent else self._base_sine
+            if identifier == 0x100:  # Implicit start/stop bit tape data block.
+                for byte in chunk:
+                    data.write(wave(0))
+                    for bit in as_bits(byte):
+                        data.write(wave(bit))
+                    data.write(wave(1))
 
-        self._sample.write(sample.low_pulse)
-        self._microseconds += sample.pulse_duration
+            elif identifier == 0x104:  # Defined tape format data block.
+                data_bits, parity, stop_bits = unpack('<Bcb', chunk[:3])
+                for byte in chunk[3:]:
+                    data.write(wave(0))
+                    bits = as_bits(byte)[:data_bits]
+                    for bit in bits:
+                        data.write(wave(bit))
+                    if parity == b'E':
+                        data.write(wave(reduce(xor, bits, 0)))
+                    elif parity == b'O':
+                        data.write(wave(1 - reduce(xor, bits, 0)))
+                    data.write(wave(1) * abs(stop_bits))
+                if stop_bits < 0:
+                    data.write(wave('FC'))
 
-    def high_pulse(self, fast=False, silent=False):
-        if self._recalculate:
-            self.calculate_sines()
-            self._recalculate = False
+            elif identifier == 0x110:  # Carrier tone.
+                data.write(wave(1) * unpack('<H', chunk)[0])
 
-        if fast:
-            sample = self._fast_silence if silent else self._fast_sine
-        else:
-            sample = self._base_silence if silent else self._base_sine
+            elif identifier == 0x111:  # Carrier tone with dummy byte.
+                n, m = unpack('<HH', chunk)
+                data.write(wave(1) * n)
+                for b in [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]:
+                    data.write(wave(b))
+                data.write(wave(1) * m)
 
-        self._sample.write(sample.high_pulse)
-        self._microseconds += sample.pulse_duration
+            elif identifier == 0x112:  # Integer gap.
+                data.write(wave('.') * unpack('<H', chunk)[0])
 
-    def calculate_sines(self):
-        self._base_sine = Cycle(
-            self._base_frequency,
-            self._phase,
-            self._sample_frequency,
-            self._bits)
-        self._fast_sine = Cycle(
-            2 * self._base_frequency,
-            self._phase,
-            self._sample_frequency,
-            self._bits)
-        self._base_silence = Cycle(
-            self._base_frequency,
-            self._phase,
-            self._sample_frequency,
-            self._bits, amplitude=0)
-        self._fast_silence = Cycle(
-            2 * self._base_frequency,
-            self._phase,
-            self._sample_frequency,
-            self._bits, amplitude=0)
+            elif identifier == 0x113:  # Change of base frequency.
+                frequency = unpack('<f', chunk)[0]
 
-    def write_riff(self, stream):
-        size = self._sample.tell()
-        bytes_per_sample = 1 if self._bits == 8 else 2
+            elif identifier == 0x114:  # Security cycles.
+                lower, upper = unpack('<BH', chunk[:3])
+                cycles = upper << 8 + lower
+                bits = reduce(lambda bs, b: bs + as_bits(b), chunk[5:], [])
+                index = 0
+                if chunk[3] == b'P':
+                    data.write(wave('FH' if data[0] else 'SH'))
+                    index += 1
+                    cycles -= 1
+                for _ in range(cycles, 1, -1):
+                    data.write(wave('FC' if bits[index] else 'SC'))
+                    index += 1
+                    cycles -= 1
+                if cycles == 1:
+                    if chunk[4] == b'P':
+                        data.write(wave('FL' if bits[index] else 'SL'))
+                    else:
+                        data.write(wave('FC' if bits[index] else 'SC'))
 
-        stream.write(b'RIFF')
-        stream.write(pack('<I', 4 + 8 + 16 + 8 + size))
+            elif identifier == 0x115:  # Phase change.
+                phase = radians(unpack('<H', chunk)[0])
 
-        # 4 bytes
-        stream.write(b'WAVE')
+            elif identifier == 0x116:  # Floating point gap.
+                secs = unpack('<f', chunk)[0]
+                data.write(wave('.') * int(round(frequency * secs)))
 
-        # 8 bytes
-        stream.write(b'fmt ')
-        stream.write(pack('<I', 16))
-
-        # 16 bytes
-        stream.write(pack('<h', 1))
-        stream.write(pack('<h', 1))
-        stream.write(pack('<I', self._sample_frequency))
-        stream.write(pack('<I', self._sample_frequency * bytes_per_sample))
-        stream.write(pack('<h', self._bits // 8))
-        stream.write(pack('<h', self._bits))
-
-        # 8 bytes
-        stream.write(b'data')
-        stream.write(pack('<I', size))
-
-        # size bytes
-        stream.write(self._sample.getbuffer())
+        data.seek(0)
+        return data.read()
 
 
-def parse_arguments():
-    parser = ArgumentParser()
-
-    parser.add_argument(
-        '-f',
-        '--frequency',
-        help='the sample frequency in Hz (default: 44100)',
-        type=int,
-        choices=[11025, 22050, 44100],
-        default=44100)
-    parser.add_argument(
-        '-b',
-        '--bits',
-        help='the sample resolution in bits (default: 16)',
-        type=int,
-        choices=[8, 16],
-        default=16)
-    parser.add_argument(
-        '-v',
-        '--verbose',
-        help='set the verbosity level (default: 1)',
-        type=int,
-        choices=[0, 1, 2, 3],
-        default=1)
-
-    return parser.parse_args()
+def write_wav(data, stream):
+    stream.write(b'RIFF')
+    stream.write(pack('<I', 4 + 8 + 16 + 8 + len(data)))
+    stream.write(b'WAVE')
+    stream.write(b'fmt ')
+    stream.write(pack('<I', 16))
+    stream.write(pack('<h', 1))
+    stream.write(pack('<h', 1))
+    stream.write(pack('<I', 44100))
+    stream.write(pack('<I', 44100 * 2))
+    stream.write(pack('<h', 2))
+    stream.write(pack('<h', 16))
+    stream.write(b'data')
+    stream.write(pack('<I', len(data)))
+    stream.write(data)
 
 
-def main():
-    args = parse_arguments()
-    recorder = Recorder(args.frequency, args.bits)
-    reader = ChunkReader(sys.stdin.buffer)
-
-    for chunk in reader.chunks:
-        if args.verbose >= 2:
-            print(chunk, file=sys.stderr)
-            if args.verbose >= 3:
-                print(chunk.recordables, file=sys.stderr)
-        elif args.verbose >= 1:
-            print('.', end='', flush=True, file=sys.stderr)
-
-        chunk.record(recorder)
-
-    if args.verbose >= 1:
-        print(file=sys.stderr)
-        print('Chunk IDs encountered ... {}'.format(
-            ', '.join(['{:04x}'.format(i)
-                       for i in sorted(reader.encountered)])),
-              file=sys.stderr)
-        print('Chunk IDs ignored ....... {}'.format(
-            ', '.join(['{:04x}'.format(i)
-                       for i in sorted(reader.ignored)])),
-              file=sys.stderr)
-        print('Total time .............. {}'.format(
-            Marker.mm_ss(recorder.microseconds)),
-            file=sys.stderr)
-        print('Markers:', file=sys.stderr)
-        for marker in recorder.markers:
-            print('  {}'.format(marker), file=sys.stderr)
-
-    recorder.write_riff(sys.stdout.buffer)
-
-
-if __name__ == '__main__':
-    main()
+write_wav(read_chunks(sys.stdin.buffer), sys.stdout.buffer)
