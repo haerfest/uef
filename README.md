@@ -44,57 +44,23 @@ Chunk  | Description
 
 ### Dependencies
 
-A vanilla Python 3.x.x. Tested on Mac OS X High Sierra with Python 3.6.5.
+A vanilla Python 3.x.x. Tested on Mac OS X High Sierra with Python 3.7.0.
 
 ### Usage
 
-Use `--help` to show help information:
-
-```
-$ python3 uef2wave.py --help
-usage: uef2wave.py [-h] [-f {11025,22050,44100}] [-b {8,16}] [-v {0,1,2,3}]
-
-optional arguments:
-  -h, --help            show this help message and exit
-  -f {11025,22050,44100}, --frequency {11025,22050,44100}
-                        the sample frequency in Hz (default: 44100)
-  -b {8,16}, --bits {8,16}
-                        the sample resolution in bits (default: 16)
-  -v {0,1,2,3}, --verbose {0,1,2,3}
-                        set the verbosity level (default: 1)
-```
-
 The script reads the UEF file contents from standard input, and writes the
-generated `.wav` to standard output.
-
-Since UEF files are often gzipped, and [Stairway To Hell](https://www.stairwaytohell.com)
-carries `.zip` files containing gzipped `.uef` files, you can pass along any of
-such files. In case of a `.zip` file, the first `.uef` inside is processed.
-
-Example:
+generated `.wav` to standard output.  For example:
 
 ```
 $ python3 uef2wave.py < Elite_E.zip > Elite_E.wav
-................................................................................
-................................................................................
-....................................................
-Chunk IDs encountered ... 0100, 0110, 0112
-Chunk IDs ignored ....... 0000
-Total time .............. 04:55
-Markers:
-  00:02 ELITE
-  00:09 ELITEdata
-  01:11 ELITEcode
-  04:53 V1
 ```
 
-By default it prints which chunks it encountered and which ones, if any, it
-ignored, which is really just for me to debug new UEF files. You can silence
-it by passing along `--verbose 0`, or even output further debug information
-by trying one of the higher verbosity levels.
+Two remarks:
 
-It also prints out a list of files in the tape image and the timestamps of their
-first data blocks, which is useful when virtually "rewinding" the tape.
+* Since UEF files are often gzipped, and [Stairway To Hell](https://www.stairwaytohell.com)
+  carries `.zip` files containing gzipped `.uef` files, you can pass along any
+  of such files. In case of a `.zip` file, the first `.uef` inside is processed.
+* The generated `.wav` file is always mono, sampled at 44,100 Hz and 16 bits.
 
 ### Shoutout
 
