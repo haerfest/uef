@@ -165,13 +165,13 @@ def write_wav(data, stream):
     stream.write(pack('<I', 4 + 8 + 16 + 8 + len(data)))
     stream.write(b'WAVE')
     stream.write(b'fmt ')
-    stream.write(pack('<I', 16))
-    stream.write(pack('<h', 1))
-    stream.write(pack('<h', 1))
-    stream.write(pack('<I', 44100))
-    stream.write(pack('<I', 44100 * 2))
-    stream.write(pack('<h', 2))
-    stream.write(pack('<h', 16))
+    stream.write(pack('<I', 16))         # PCM
+    stream.write(pack('<h', 1))          # PCM
+    stream.write(pack('<h', 1))          # Channels
+    stream.write(pack('<I', 44100))      # Sample rate
+    stream.write(pack('<I', 44100 * 2))  # Byte rate
+    stream.write(pack('<h', 2))          # Block align
+    stream.write(pack('<h', 16))         # Bits per sample
     stream.write(b'data')
     stream.write(pack('<I', len(data)))
     stream.write(data)
