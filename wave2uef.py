@@ -10,17 +10,6 @@ class SyncError(Exception):
     pass
 
 
-def print_byte(bits):
-    asc = 0
-    for index, bit in enumerate(bits):
-        asc += bit * 2**index
-
-    if 32 <= asc <= 127:
-        print(chr(asc), end='', flush=True)
-    else:
-        print('.', end='', flush=True)
-
-
 def get_sample(stream):
     sample = stream.read(2)
     if not sample:
@@ -41,7 +30,7 @@ def unget(stream, length=1):
     stream.seek(-length * 2, io.SEEK_CUR)
 
 
-def get_pulse(stream, verbose=False):
+def get_pulse(stream):
     first = get_sample(stream)
     samples = [first]
 
@@ -66,10 +55,6 @@ def get_pulse(stream, verbose=False):
     if sign(sample) != 0:
         unget(stream)
 
-    if verbose:
-        print('pulse(sgn={}, samples={})'.format(
-            sign(first), samples), flush=True)
-
     return sgn, samples
 
 
@@ -87,7 +72,6 @@ def skip_header(stream):
     assert unpack('<h', stream.read(2))[0] == 16         # Bits per sample
     assert stream.read(4) == b'data'
     stream.read(4)
-    return io.BytesIO(stream.read())
 
 
 def read_cycle(stream, expected_freq):
@@ -190,17 +174,16 @@ def state_byte(stream):
     # Read the stop bit.
     read_one(stream)
 
-    print_byte(bits)
-
     # Another start bit for the next byte.
     read_zero(stream)
 
     return 'state_byte'
 
 
-stream = skip_header(sys.stdin.buffer)
-state = 'state_sync'
+skip_header(sys.stdin.buffer)
+stream = io.BytesIO(sys.stdin.buffer.read())
 
+state = 'state_sync'
 while state:
     try:
         handler = globals().get(state)
