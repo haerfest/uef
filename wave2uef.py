@@ -6,8 +6,27 @@ import io
 import sys
 
 
+class SyncError(Exception):
+    pass
+
+
+def print_byte(bits):
+    asc = 0
+    for index, bit in enumerate(bits):
+        asc += bit * 2**index
+
+    if 32 <= asc <= 127:
+        print(chr(asc), end='', flush=True)
+    else:
+        print('.', end='', flush=True)
+
+
 def get_sample(stream):
-    return unpack('<h', stream.read(2))[0] / 32768.0
+    sample = stream.read(2)
+    if not sample:
+        raise EOFError()
+
+    return unpack('<h', sample)[0] / 32768.0
 
 
 def sign(x):
@@ -22,33 +41,36 @@ def unget(stream, length=1):
     stream.seek(-length * 2, io.SEEK_CUR)
 
 
-def get_pulse(stream):
+def get_pulse(stream, verbose=False):
     first = get_sample(stream)
-    length = 1
+    samples = [first]
 
     # Figure out the sign of our pulse. If the first sample is zero,
     # we look at the next to figure out our sign, or whether we are
     # silence.
     sgn = sign(first)
     if sgn == 0:
-        subsequent = get_sample(stream)
-        length += 1
-        if sign(subsequent) != 0:
-            sgn = sign(subsequent)
+        sample = get_sample(stream)
+        samples.append(sample)
+        if sign(sample) != 0:
+            sgn = sign(sample)
 
     # Consume the pulse.
-    subsequent = get_sample(stream)
-    while sign(subsequent) == sgn:
-        length += 1
-        subsequent = get_sample(stream)
+    sample = get_sample(stream)
+    while sign(sample) == sgn:
+        samples.append(sample)
+        sample = get_sample(stream)
 
     # If the final sample is not zero, then its sign has flipped
     # and we unread it.
-    if sign(subsequent) != 0:
+    if sign(sample) != 0:
         unget(stream)
 
-    # print('{},{}'.format(sign(first), length), flush=True)
-    return sign(first), length
+    if verbose:
+        print('pulse(sgn={}, samples={})'.format(
+            sign(first), samples), flush=True)
+
+    return sgn, samples
 
 
 def skip_header(stream):
@@ -68,169 +90,120 @@ def skip_header(stream):
     return io.BytesIO(stream.read())
 
 
-def wait_first_pulse(stream):
-    sgn, length = get_pulse(stream)
-    while length not in [8, 9, 10, 16, 17, 18, 19] or sgn >= 0:
-        sgn, length = get_pulse(stream)
-
-    unget(stream, length)
-    return 'ok'
-
-
 def read_cycle(stream, expected_freq):
-    sgn1, length1 = get_pulse(stream)
-    sgn2, length2 = get_pulse(stream)
+    sgn1, samples1 = get_pulse(stream)
+    sgn2, samples2 = get_pulse(stream)
+
+    length1 = len(samples1)
+    length2 = len(samples2)
 
     if sgn2 != -sgn1:
-        # Phase is wrong.
         unget(stream, length1 + length2)
-        return 'phase'
+        raise SyncError('phase')
 
     ratio = max(length1, length2) / min(length1, length2)
     if ratio > 1.6:
-        # Pulse lengths don't match.
         unget(stream, length1 + length2)
-        return 'pulse lengths'
+        raise SyncError('ratio')
 
-    freq = 44100 / (length1 + length2)
+    freq = int(44100 / (length1 + length2))
     if abs(freq - expected_freq) > 500:
         unget(stream, length1 + length2)
-        return 'not {}'.format(expected_freq)
-
-    return 'ok'
+        raise SyncError('frequency {} {}'.format(freq, expected_freq))
 
 
-def read_carrier(stream):
-    # A byte consists of a start bit (0), eight data bits, and a stop bit (1).
-    # That's at most nine one-bits, or eighteen fast cycles, in a row. If we
-    # read nineteen or more fast cycles, we are in the carrier signal.
-    for _ in range(19):
-        result = read_cycle(stream, 2400)
-        if result != 'ok':
-            return result
-
-    # Consume the remainder of the carrier.
-    while read_cycle(stream, 2400) == 'ok':
-        pass
-
-    return 'ok'
+def read_zero(stream):
+    read_cycle(stream, 1200)
 
 
-def read_fast_cycle(stream):
-    return read_cycle(stream, 2400)
+def read_one(stream):
+    read_cycle(stream, 2400)
+    read_cycle(stream, 2400)
 
 
-def read_start_bit(stream):
-    return read_cycle(stream, 1200)
+def state_sync(stream):
+    try:
+        while True:
+            sgn, samples = get_pulse(stream)
+            if len(samples) not in [8, 9, 10, 16, 17, 18, 19]:
+                # Too short or too long.
+                continue
+            if sgn >= 0:
+                # Not phase 180.
+                continue
+
+            # Rewind and try to read a carrier tone.
+            unget(stream, len(samples))
+            try:
+                read_cycle(stream, 2400)
+                break
+            except SyncError:
+                # Skip over what we just read.
+                for _ in samples:
+                    get_sample(stream)
+
+        return 'state_carrier'
+
+    except EOFError:
+        # Done.
+        return None
 
 
-def read_byte(stream):
+def state_carrier(stream):
+    try:
+        # A byte consists of a start bit (0), eight data bits, and a stop bit
+        # (1). That's at most nine one-bits, or eighteen fast cycles, in a row.
+        # If we read nineteen or more fast cycles, we are in the carrier
+        # signal.
+        for _ in range(19):
+            read_cycle(stream, 2400)
+
+        try:
+            # Consume the remainder of the carrier tone.
+            while True:
+                read_cycle(stream, 2400)
+        except SyncError:
+            pass
+
+        # Read a start bit.
+        read_zero(stream)
+
+        return 'state_byte'
+
+    except EOFError:
+        # Done.
+        return None
+
+
+def state_byte(stream):
     bits = []
 
+    # Read all eight bits.
     for _ in range(8):
-        result = read_cycle(stream, 1200)
-        if result == 'ok':
-            # Slow cycle, a zero-bit.
+        try:
+            read_zero(stream)
             bits.append(0)
-            continue
+        except SyncError:
+            read_one(stream)
+            bits.append(1)
 
-        # Need two fast cycles for a one-bit.
-        result = read_cycle(stream, 2400)
-        if result != 'ok':
-            return result
+    # Read the stop bit.
+    read_one(stream)
 
-        result = read_cycle(stream, 2400)
-        if result != 'ok':
-            return result
+    print_byte(bits)
 
-        bits.append(1)
+    # Another start bit for the next byte.
+    read_zero(stream)
 
-    asc = 0
-    for index, bit in enumerate(bits):
-        asc += bit * 2**index
+    return 'state_byte'
 
-    if 32 <= asc <= 127:
-        print(chr(asc), end='', flush=True)
-    else:
-        print('.', end='', flush=True)
-
-    return 'ok'
-
-
-def read_stop_bit(stream):
-    result = read_cycle(stream, 2400)
-    if result != 'ok':
-        return result
-
-    result = read_cycle(stream, 2400)
-    if result != 'ok':
-        return result
-
-    return 'ok'
-
-
-def read_carrier_or_start_bit(stream):
-    result = read_carrier(stream)
-    if result == 'ok':
-        return 'carrier'
-
-    result = read_start_bit(stream)
-    if result == 'ok':
-        return 'start bit'
-
-    return 'no carrier or start bit'
-
-
-def start_bit_or_end(stream):
-    result = read_start_bit(stream)
-    if result == 'ok':
-        return 'start bit'
-
-    print(result)
-    print(get_pulse(stream))
-    print(get_pulse(stream))
-    return 'end'
-
-
-states = {
-    'start': (wait_first_pulse, {
-        'ok': 'carrier',
-    }),
-    'carrier': (read_carrier, {
-        'ok': 'start bit',
-    }),
-    'start bit': (read_start_bit, {
-        'ok': 'byte',
-    }),
-    'byte': (read_byte, {
-        'ok': 'stop bit',
-    }),
-    'stop bit': (read_stop_bit, {
-        'ok': 'carrier or start bit',
-    }),
-    'carrier or start bit': (read_carrier_or_start_bit, {
-        'carrier': 'start bit or end',
-        'start bit': 'byte',
-    }),
-    'start bit or end': (start_bit_or_end, {
-        'start bit': 'byte',
-        'end': 'done',
-    })
-}
 
 stream = skip_header(sys.stdin.buffer)
-state = 'start'
+state = 'state_sync'
 
-while True:
-    # print('state={}'.format(state))
-    fn, transitions = states[state]
-    result = fn(stream)
-    if result not in transitions:
-        raise Exception(
-            'Error: result "{}" in state "{}" at pos {}'.format(
-                result, state, stream.tell()))
-
-    next_state = transitions[result]
-    if next_state == 'done':
-        break
-    state = next_state
+while state:
+    try:
+        handler = globals().get(state)
+        state = handler(stream)
+    except SyncError as e:
+        state = 'state_sync'
