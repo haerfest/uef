@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from struct import unpack
+from struct import pack, unpack
 
 import io
 import sys
@@ -8,6 +8,55 @@ import sys
 
 class SyncError(Exception):
     pass
+
+
+def secs(start_pos, end_pos):
+    byte_count = end_pos - start_pos
+    sample_count = byte_count / 2
+    return sample_count / 44100.0
+
+
+class GapChunk(object):
+    def __repr__(self):
+        return '<Gap {:.1f} secs>'.format(secs(self.start, self.end))
+
+    def write(self, stream):
+        stream.write(pack('<HIf', 0x116, 4, secs(self.start, self.end)))
+
+
+class CarrierChunk(object):
+    def __repr__(self):
+        return '<Carrier {:.1f} secs>'.format(secs(self.start, self.end))
+
+    def write(self, stream):
+        cycles = int(secs(self.start, self.end) * 2400)
+        stream.write(pack('<HIH', 0x110, 2, cycles))
+
+
+class DataChunk(object):
+    def __repr__(self):
+        return '<Data {} bytes "{}">'.format(len(self.bytes), self.filename)
+
+    @property
+    def filename(self):
+        s = ''
+        for x in self.bytes:
+            if x == 0:
+                break
+            s += chr(x) if (32 <= x < 127) else '&{:02x}'.format(x)
+        return s
+
+    def write(self, stream):
+        stream.write(pack('<HI', 0x100, len(self.bytes)))
+        for byte in self.bytes:
+            stream.write(pack('B', byte))
+
+
+def byte(bits):
+    n = 0
+    for pos, bit in enumerate(bits):
+        n += bit * 2**pos
+    return n
 
 
 def get_sample(stream):
@@ -105,7 +154,10 @@ def read_one(stream):
     read_cycle(stream, 2400)
 
 
-def state_sync(stream):
+def state_sync(stream, chunks):
+    chunks.append(GapChunk())
+    chunks[-1].start = stream.tell()
+
     try:
         while True:
             sgn, samples = get_pulse(stream)
@@ -126,14 +178,19 @@ def state_sync(stream):
                 for _ in samples:
                     get_sample(stream)
 
+        chunks[-1].end = stream.tell()
+
         return 'state_carrier'
 
     except EOFError:
-        # Done.
+        chunks[-1].end = stream.tell()
         return None
 
 
-def state_carrier(stream):
+def state_carrier(stream, chunks):
+    chunks.append(CarrierChunk())
+    chunks[-1].start = stream.tell()
+
     try:
         # A byte consists of a start bit (0), eight data bits, and a stop bit
         # (1). That's at most nine one-bits, or eighteen fast cycles, in a row.
@@ -149,17 +206,21 @@ def state_carrier(stream):
         except SyncError:
             pass
 
+        chunks[-1].end = stream.tell()
+
         # Read a start bit.
         read_zero(stream)
 
         return 'state_byte'
 
     except EOFError:
-        # Done.
+        chunks[-1].end = stream.tell()
         return None
 
 
-def state_byte(stream):
+def state_byte(stream, chunks):
+    start = stream.tell()
+
     bits = []
 
     # Read all eight bits.
@@ -174,19 +235,43 @@ def state_byte(stream):
     # Read the stop bit.
     read_one(stream)
 
-    # Another start bit for the next byte.
-    read_zero(stream)
+    if not (chunks and isinstance(chunks[-1], DataChunk)):
+        chunks.append(DataChunk())
+        chunks[-1].start = start
+        chunks[-1].bytes = []
+    chunks[-1].end = stream.tell()
+    chunks[-1].bytes.append(byte(bits))
 
-    return 'state_byte'
+    # Another start bit for the next byte, or a fast cycle for a
+    # carrier.
+    try:
+        read_zero(stream)
+        return 'state_byte'
+    except SyncError:
+        read_cycle(stream, 2400)
+        return 'state_carrier'
+
+
+def write_uef(chunks, stream):
+    stream.write(b'UEF File!\x00')  # Magic value.
+    stream.write(b'\x01\x00')       # Version 0.10.
+
+    for chunk in chunks:
+        chunk.write(stream)
 
 
 skip_header(sys.stdin.buffer)
 stream = io.BytesIO(sys.stdin.buffer.read())
 
 state = 'state_sync'
+chunks = []
 while state:
     try:
         handler = globals().get(state)
-        state = handler(stream)
+        state = handler(stream, chunks)
     except SyncError as e:
         state = 'state_sync'
+
+write_uef(chunks, sys.stdout.buffer)
+for chunk in chunks:
+    print(chunk, file=sys.stderr)
