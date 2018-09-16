@@ -7,6 +7,8 @@ files, which are tape images of 8-bit Acorn microcomputers:
 * `wave2uef`
 * `bin2uef`
 
+All scripts require Python 3. I tested them on macOS X and Python 3.7.0.
+
 ## `uef2wave`
 
 Convert UEF files to audible `.wav` files. With the appropriate cable you can
@@ -43,10 +45,6 @@ Chunk  | Description
 `0114` | Security cycles.
 `0116` | Floating point gap.
 
-### Dependencies
-
-A vanilla Python 3.x.x. Tested on Mac OS X High Sierra with Python 3.7.0.
-
 ### Usage
 
 The script reads the UEF file contents from standard input, and writes the
@@ -71,8 +69,8 @@ but your browser.
 
 ## `wave2uef`
 
-Basicaly the inverse of `uef2wave`: takes a 16-bit 44 kHz mono `.wav` file and
-outputs a `.uef` file. A bit more limited in the chunks it supports.
+Basically the inverse of `uef2wave`: takes a 16-bit 44 kHz mono `.wav` file and
+outputs a UEF file. A bit more limited in the chunks it supports.
 
 ### Supported chunks
 
