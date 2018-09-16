@@ -4,6 +4,7 @@ Contains Python 3 scripts to assist working with [UEF](https://en.wikipedia.org/
 files, which are tape images of 8-bit Acorn microcomputers:
 
 * `uef2wave`
+* `wave2uef`
 * `bin2uef`
 
 ## `uef2wave`
@@ -68,6 +69,36 @@ For far more convenience, check out [PlayUEF](http://www.8bitkick.cc/playuef.htm
 which allows you to play back audio recordings of various games using nothing
 but your browser.
 
+## `wave2uef`
+
+Basicaly the inverse of `uef2wave`: takes a 16-bit 44 kHz mono `.wav` file and
+outputs a `.uef` file. A bit more limited in the chunks it supports.
+
+### Supported chunks
+
+The following UEF chunks are supported:
+
+Chunk  | Description
+-------|------------
+`0100` | Implicit start/stop bit tape data block.
+`0110` | Carrier tone.
+`0116` | Floating point gap.
+
+### Usage
+
+The script reads the `.wav` file contents from standard input, and writes the
+generated UEF file to standard output. Prints some debug information to
+standard error at the moment. For example:
+
+```
+$ python3 wave2uef.py < PERSIAN.wav > PERSIAN.uef
+<Gap 1.2 secs>
+<Carrier 7.7 secs>
+<Data 284 bytes "*PERSIAN">
+<Carrier 5.3 secs>
+<Gap 2.2 secs>
+```
+
 ## `bin2uef`
 
 This is a simple script to store a binary file onto a UEF file, which you may
@@ -76,7 +107,7 @@ subsequently load into your Acorn micro using `uef2wave`.
 ### Usage
 
 ```
-python3 bin2uef.py --help
+$ python3 bin2uef.py --help
 usage: bin2uef.py [-h] [-n NAME] -l ADDRESS [-e ADDRESS]
 
 optional arguments:
