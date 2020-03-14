@@ -16,8 +16,7 @@ play these back on your Mac or PC and load them via the cassette interface on
 your Acorn.
 
 You can read the [UEF specification](http://electrem.emuunlim.com/UEFSpecs.htm),
-but note there seems to be a small mistake with the description of the carrier
-wave (emphasis mine):
+but note the specification of the carrier block (emphasis mine):
 
 > output a **single** cycle at twice the current base frequency
 
@@ -25,10 +24,16 @@ This makes some games fail to load on an Electron, for example:
 
 * [JetSetWilly_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Tynesoft/JetSetWilly_E.zip)
 * [Hopper-PIASRR_E.zip](https://www.stairwaytohell.com/electron/uefarchive/SuperiorReRelease/Hopper-PIASRR_E.zip)
+* [Firetrack_E.zip](https://www.stairwaytohell.com/electron/uefarchive/Superior/Firetrack_E.zip)
 
 Other implementations I've checked, including the [reference one](https://github.com/TomHarte/CLK/blob/master/Storage/Tape/Formats/TapeUEF.cpp),
 treat one carrier cycle the same as a one-bit, which outputs _two_ cycles at a
-time. With that fix in place, the above games load successfully.
+time. That helps loading Jet Set Willy and Hopper, but Firetrack needs _four_
+cycles.
+
+To that end I have added boolean `DEVIATE_FROM_SPEC` which is `True` by default,
+and which adds these fixes. Set it to `False` if you want to strictly adhere to
+the specification.
 
 ### Supported chunks
 
