@@ -115,7 +115,8 @@ def read_chunks(stream):
                     data.write(wave('FC'))
 
             elif identifier == 0x110:  # Carrier tone.
-                data.write(wave(1) * unpack('<H', chunk)[0])
+                cycles = unpack('<H', chunk)[0]
+                data.write(wave('FC') * cycles)
 
             elif identifier == 0x111:  # Carrier tone with dummy byte.
                 n, m = unpack('<HH', chunk)
@@ -125,7 +126,8 @@ def read_chunks(stream):
                 data.write(wave(1) * m)
 
             elif identifier == 0x112:  # Integer gap.
-                data.write(wave('.') * unpack('<H', chunk)[0])
+                cycles = unpack('<H', chunk)[0]
+                data.write(wave('.') * cycles)
 
             elif identifier == 0x113:  # Change of base frequency.
                 frequency = unpack('<f', chunk)[0]
