@@ -116,7 +116,7 @@ def read_chunks(stream):
 
             elif identifier == 0x110:  # Carrier tone.
                 cycles = unpack('<H', chunk)[0]
-                data.write(wave('FC') * cycles)
+                data.write(wave(1) * cycles) # Note: spec says wave('FC').
 
             elif identifier == 0x111:  # Carrier tone with dummy byte.
                 n, m = unpack('<HH', chunk)
