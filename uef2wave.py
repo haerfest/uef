@@ -12,9 +12,6 @@ import sys
 import zipfile
 
 
-DEVIATE_FROM_SPEC = True
-
-
 def open_zip(file):
     if not zipfile.is_zipfile(file):
         file.seek(0)
@@ -119,9 +116,6 @@ def read_chunks(stream):
 
             elif identifier == 0x110:  # Carrier tone.
                 cycles = unpack('<H', chunk)[0]
-                if DEVIATE_FROM_SPEC:
-                    cycles *= 2  # To comply with reference implementation.
-                    cycles *= 2  # To help FireTrack load.
                 data.write(wave('FC') * cycles)
 
             elif identifier == 0x111:  # Carrier tone with dummy byte.
