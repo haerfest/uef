@@ -1,15 +1,31 @@
 #!/usr/bin/env python
 
+from argparse  import ArgumentParser
 from functools import reduce
-from math import pi, radians, sin
-from operator import xor
-from struct import pack, unpack
+from math      import pi, radians, sin
+from operator  import xor
+from struct    import pack, unpack
 
 import gzip
 import io
 import os
 import sys
 import zipfile
+
+
+args = None
+
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument('-s', '--stretch', metavar='FACTOR', type=int,
+                        help='stretch carrier tone duration (default: 1)',
+                        default=1)
+    args = parser.parse_args()
+
+    args.stretch = max(1, args.stretch)
+
+    return args
 
 
 def open_zip(file):
@@ -116,7 +132,7 @@ def read_chunks(stream):
 
             elif identifier == 0x110:  # Carrier tone.
                 cycles = unpack('<H', chunk)[0]
-                data.write(wave(1) * cycles) # Note: spec says wave('FC').
+                data.write(wave('FC') * cycles * args.stretch)
 
             elif identifier == 0x111:  # Carrier tone with dummy byte.
                 n, m = unpack('<HH', chunk)
@@ -179,4 +195,11 @@ def write_wav(data, stream):
     stream.write(data)
 
 
-write_wav(read_chunks(sys.stdin.buffer), sys.stdout.buffer)
+def main():
+    global args
+    args = parse_args()
+    write_wav(read_chunks(sys.stdin.buffer), sys.stdout.buffer)
+
+
+if __name__ == '__main__':
+    main()

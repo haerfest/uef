@@ -18,6 +18,14 @@ your Acorn.
 You can read the [UEF specification](http://electrem.emuunlim.com/UEFSpecs.htm)
 one.
 
+There is a `--stretch` command-line parameter by which you can stretch the
+duration of carrier tones. The specification states that a carrier tone is one
+fast cycle, repeated the number of cycles as specified in the UEF file.
+
+However, for some software this seems to be too short, and you can stretch
+the number of cycles by this factor. For instance, `--stretch 2` makes every
+carrier tone last for twice as long as specified in the UEF.
+
 ### Supported chunks
 
 The following UEF chunks are supported:
