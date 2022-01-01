@@ -189,7 +189,7 @@ def state_sync(stream, chunks):
 
 def state_carrier(stream, chunks):
     chunks.append(CarrierChunk())
-    chunks[-1].start = stream.tell()
+    chunks[-1].start = chunks[-1].end = stream.tell()
 
     try:
         # A byte consists of a start bit (0), eight data bits, and a stop bit
