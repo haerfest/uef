@@ -22,32 +22,35 @@ def secs(start_pos, end_pos):
     return sample_count / 44100.0
 
 class Chunk(object):
-    def __init__(self):
+    def __init__(self, _=None):
         self.start = marker
         self.end   = stream.tell()
 
 class Gap(Chunk):
     def __repr__(self):
-        return '<Gap {:.1f} secs>'.format(secs(self.start, self.end))
+        return '<Gap {:.1f} secs {}:{}>'.format(secs(self.start, self.end), self.start, self.end)
 
     def write(self, stream):
-        stream.write(pack('<HIf', 0x116, 4, secs(self.start, self.end)))
+        duration = secs(self.start, self.end)
+        if duration:
+            stream.write(pack('<HIf', 0x116, 4, duration))
 
 class Carrier(Chunk):
     def __repr__(self):
-        return '<Carrier {:.1f} secs>'.format(secs(self.start, self.end))
+        return '<Carrier {:.1f} secs {}:{}>'.format(secs(self.start, self.end), self.start, self.end)
 
     def write(self, stream):
         cycles = int(secs(self.start, self.end) * 2400)
-        stream.write(pack('<HIH', 0x110, 2, cycles))
+        if cycles:
+            stream.write(pack('<HIH', 0x110, 2, cycles))
 
 class Data(Chunk):
-    def __init__(self, data):
+    def __init__(self, data=None):
         super().__init__()
         self.data = data or []
 
     def __repr__(self):
-        return '<Data {} bytes "{}">'.format(len(self.data), self.filename)
+        return '<Data {} bytes "{}" {}:{}>'.format(len(self.data), self.filename, self.start, self.end)
 
     @property
     def filename(self):
@@ -59,10 +62,26 @@ class Data(Chunk):
         return s
 
     def write(self, stream):
-        stream.write(pack('<HI', 0x100, len(self.data)))
-        for byte in self.data:
-            stream.write(pack('B', byte))
+        if self.data:
+            stream.write(pack('<HI', 0x100, len(self.data)))
+            for byte in self.data:
+                stream.write(pack('B', byte))
 
+
+def skip_header(stream):
+    assert stream.read(4) == b'RIFF'
+    stream.read(4)
+    assert stream.read(4) == b'WAVE'
+    assert stream.read(4) == b'fmt '
+    assert unpack('<I', stream.read(4))[0] == 16         # PCM
+    assert unpack('<h', stream.read(2))[0] == 1          # PCM
+    assert unpack('<h', stream.read(2))[0] == 1          # Channels
+    assert unpack('<I', stream.read(4))[0] == 44100      # Sample rate
+    assert unpack('<I', stream.read(4))[0] == 44100 * 2  # Byte rate
+    assert unpack('<h', stream.read(2))[0] == 2          # Block align
+    assert unpack('<h', stream.read(2))[0] == 16         # Bits per sample
+    assert stream.read(4) == b'data'
+    stream.read(4)
 
 def byte(bits):
     n = 0
@@ -99,14 +118,13 @@ def pulse():
     total = 0
     while sign(sample()) == 0:
         total += 1
-
-    # Make the non-zero sample we just read available again.
     rewind()
-    sgn     = sign(sample())
-    samples = 1
 
     # Consume the samples that are on one the same side of the y-axis, until we
     # cross over to the other side, indicating the start of the next pulse.
+    sgn     = sign(sample())
+    total  += 1
+    samples = 1
     while sign(sample()) == sgn:
         total   += 1
         samples += 1
@@ -124,34 +142,13 @@ def pulse():
 
     raise SyncError(f'pulse? {samples}')
 
-
-def skip_header(stream):
-    assert stream.read(4) == b'RIFF'
-    stream.read(4)
-    assert stream.read(4) == b'WAVE'
-    assert stream.read(4) == b'fmt '
-    assert unpack('<I', stream.read(4))[0] == 16         # PCM
-    assert unpack('<h', stream.read(2))[0] == 1          # PCM
-    assert unpack('<h', stream.read(2))[0] == 1          # Channels
-    assert unpack('<I', stream.read(4))[0] == 44100      # Sample rate
-    assert unpack('<I', stream.read(4))[0] == 44100 * 2  # Byte rate
-    assert unpack('<h', stream.read(2))[0] == 2          # Block align
-    assert unpack('<h', stream.read(2))[0] == 16         # Bits per sample
-    assert stream.read(4) == b'data'
-    stream.read(4)
-
-
 def cycle(expected_freq):
     count1, sgn1, freq1 = pulse()
     count2, sgn2, freq2 = pulse()
 
-    # Assume phase 180. If not, rewind to before the second pulse.
-    if sgn1 < 0:
-        raise SyncError('not phase 180', count2)
-
     # Pulses must have opposite signs. If not, rewind to before the second
     # pulse.
-    if sgn2 != -sgn1:
+    if sgn1 == sgn2:
         rewind(count2)
         raise SyncError('pulses with same sign')
 
@@ -214,7 +211,8 @@ def sync():
     mark()
     while not peek(fast_cycle):
         sample()
-    chunks.append(Gap())
+    if stream.tell() > marker:
+        chunks.append(Gap())
 
 def carrier():
     mark()
@@ -233,8 +231,15 @@ def data():
         if not peek(start_bit):
             break
         start_bit()
-    chunks.append(Data(data))
+    if data:
+        chunks.append(Data(data))
 
+def carrier_or_data():
+    if peek(start_bit):
+        data()
+    else:
+        carrier()
+    
 def write_uef(stream):
     stream.write(b'UEF File!\x00')  # Magic value.
     stream.write(b'\x01\x00')       # Version 0.10.
@@ -246,19 +251,17 @@ def write_uef(stream):
 skip_header(sys.stdin.buffer)
 stream = io.BytesIO(sys.stdin.buffer.read())
 
-sync()
 try:
     while True:
-        print('.', end='', file=sys.stderr, flush=True)
         try:
-            carrier()
-            data()
+            print('.', end='', flush=True, file=sys.stderr)
+            carrier_or_data()
         except SyncError:
             sync()
 except EOFError:
-    print('Warning: premature end of file', file=sys.stderr)
+    pass
 
-print()    
+print(file=sys.stderr)    
 for chunk in chunks:
     print(chunk, file=sys.stderr)
 
