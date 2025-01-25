@@ -222,9 +222,9 @@ def carrier():
     chunks.append(Carrier())
 
 def data():
+    data = []
     mark()
     start_bit()
-    data = []
     while True:
         data.append(byte(data_bit() for _ in range(8)))
         stop_bit()
