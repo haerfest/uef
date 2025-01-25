@@ -6,25 +6,34 @@ import io
 import sys
 
 
+# Global variables, because why not.
+stream = None
+chunks = []
+marker = None
+
+
 class SyncError(Exception):
     pass
 
 
 def secs(start_pos, end_pos):
-    byte_count = end_pos - start_pos
+    byte_count   = end_pos - start_pos
     sample_count = byte_count / 2
     return sample_count / 44100.0
 
+class Chunk(object):
+    def __init__(self):
+        self.start = marker
+        self.end   = stream.tell()
 
-class GapChunk(object):
+class Gap(Chunk):
     def __repr__(self):
         return '<Gap {:.1f} secs>'.format(secs(self.start, self.end))
 
     def write(self, stream):
         stream.write(pack('<HIf', 0x116, 4, secs(self.start, self.end)))
 
-
-class CarrierChunk(object):
+class Carrier(Chunk):
     def __repr__(self):
         return '<Carrier {:.1f} secs>'.format(secs(self.start, self.end))
 
@@ -32,23 +41,26 @@ class CarrierChunk(object):
         cycles = int(secs(self.start, self.end) * 2400)
         stream.write(pack('<HIH', 0x110, 2, cycles))
 
+class Data(Chunk):
+    def __init__(self, data):
+        super().__init__()
+        self.data = data or []
 
-class DataChunk(object):
     def __repr__(self):
-        return '<Data {} bytes "{}">'.format(len(self.bytes), self.filename)
+        return '<Data {} bytes "{}">'.format(len(self.data), self.filename)
 
     @property
     def filename(self):
         s = ''
-        for x in self.bytes:
+        for x in self.data:
             if x == 0:
                 break
-            s += chr(x) if (32 <= x < 127) else '&{:02x}'.format(x)
+            s += chr(x) if (32 <= x < 127) else '?'.format(x)
         return s
 
     def write(self, stream):
-        stream.write(pack('<HI', 0x100, len(self.bytes)))
-        for byte in self.bytes:
+        stream.write(pack('<HI', 0x100, len(self.data)))
+        for byte in self.data:
             stream.write(pack('B', byte))
 
 
@@ -58,14 +70,12 @@ def byte(bits):
         n += bit * 2**pos
     return n
 
-
-def get_sample(stream):
+def sample():
     sample = stream.read(2)
     if not sample:
         raise EOFError()
 
-    return unpack('<h', sample)[0] / 32768.0
-
+    return int(unpack('<h', sample)[0] / 327.0)  # round in [-100, 100]
 
 def sign(x):
     if x < 0:
@@ -74,37 +84,45 @@ def sign(x):
         return +1
     return 0
 
+def rewind(sample_count=1):
+    stream.seek(-sample_count * 2, io.SEEK_CUR)
 
-def unget(stream, length=1):
-    stream.seek(-length * 2, io.SEEK_CUR)
+# A single 1200 Hz sine cycle takes 1/1200 of a second. Sampling it at 44100 Hz
+# results in roughly 37 samples. Likewise, a 2400 Hz sine cycle results in about
+# 18 samples. A pulse is half a sine wave, or half a period, and thus consists
+# of roughly 37/2 = 18 and 18/2 = 9 samples. We could try to fit the signal
+# onto perfect sine waves, but it should likely be good enough to treat the
+# sine wave as a square one.
+def pulse():
 
+    # First skip any zero samples.
+    total = 0
+    while sign(sample()) == 0:
+        total += 1
 
-def get_pulse(stream):
-    first = get_sample(stream)
-    samples = [first]
+    # Make the non-zero sample we just read available again.
+    rewind()
+    sgn     = sign(sample())
+    samples = 1
 
-    # Figure out the sign of our pulse. If the first sample is zero,
-    # we look at the next to figure out our sign, or whether we are
-    # silence.
-    sgn = sign(first)
-    if sgn == 0:
-        sample = get_sample(stream)
-        samples.append(sample)
-        if sign(sample) != 0:
-            sgn = sign(sample)
+    # Consume the samples that are on one the same side of the y-axis, until we
+    # cross over to the other side, indicating the start of the next pulse.
+    while sign(sample()) == sgn:
+        total   += 1
+        samples += 1
 
-    # Consume the pulse.
-    sample = get_sample(stream)
-    while sign(sample) == sgn:
-        samples.append(sample)
-        sample = get_sample(stream)
+    # Restore the sample that is part of the next pulse.
+    rewind()
 
-    # If the final sample is not zero, then its sign has flipped
-    # and we unread it.
-    if sign(sample) != 0:
-        unget(stream)
+    # Ok if we got a 2400 Hz pulse, should be ~9 samples.
+    if 9 - 2 <= samples <= 9 + 2:
+        return total, sgn, 2400
 
-    return sgn, samples
+    # Ok if we got a 1200 Hz pulse, should be ~18 samples.
+    if 18 - 2 <= samples <= 18 + 2:
+        return total, sgn, 1200
+
+    raise SyncError(f'pulse? {samples}')
 
 
 def skip_header(stream):
@@ -123,136 +141,101 @@ def skip_header(stream):
     stream.read(4)
 
 
-def read_cycle(stream, expected_freq):
-    sgn1, samples1 = get_pulse(stream)
-    sgn2, samples2 = get_pulse(stream)
+def cycle(expected_freq):
+    count1, sgn1, freq1 = pulse()
+    count2, sgn2, freq2 = pulse()
 
-    length1 = len(samples1)
-    length2 = len(samples2)
+    # Assume phase 180. If not, rewind to before the second pulse.
+    if sgn1 < 0:
+        raise SyncError('not phase 180', count2)
 
+    # Pulses must have opposite signs. If not, rewind to before the second
+    # pulse.
     if sgn2 != -sgn1:
-        unget(stream, length1 + length2)
-        raise SyncError('phase')
+        rewind(count2)
+        raise SyncError('pulses with same sign')
 
-    ratio = max(length1, length2) / min(length1, length2)
-    if ratio > 1.6:
-        unget(stream, length1 + length2)
-        raise SyncError('ratio')
+    # Pulses must describe the same frequency. If not, rewind to before the
+    # second pulse.
+    if freq1 != freq2:
+        rewind(count2)
+        raise SyncError('pulses with different frequencies')
 
-    freq = int(44100 / (length1 + length2))
-    if abs(freq - expected_freq) > 500:
-        unget(stream, length1 + length2)
-        raise SyncError('frequency {} {}'.format(freq, expected_freq))
+    # We read a valid pulse but not of the expected frequency. Rewind to the
+    # beginning of the pulse for another attempt.
+    if freq1 != expected_freq:
+        rewind(count1 + count2)
+        raise SyncError(f'cycle of {freq1} Hz')
 
+    return count1 + count2
 
-def read_zero(stream):
-    read_cycle(stream, 1200)
-
-
-def read_one(stream):
-    read_cycle(stream, 2400)
-    read_cycle(stream, 2400)
-
-
-def state_sync(stream, chunks):
-    chunks.append(GapChunk())
-    chunks[-1].start = stream.tell()
-
-    try:
-        while True:
-            sgn, samples = get_pulse(stream)
-            if len(samples) not in [8, 9, 10, 16, 17, 18, 19]:
-                # Too short or too long.
-                continue
-            if sgn >= 0:
-                # Not phase 180.
-                continue
-
-            # Rewind and try to read a carrier tone.
-            unget(stream, len(samples))
-            try:
-                read_cycle(stream, 2400)
-                break
-            except SyncError:
-                # Skip over what we just read.
-                for _ in samples:
-                    get_sample(stream)
-
-        chunks[-1].end = stream.tell()
-
-        return 'state_carrier'
-
-    except EOFError:
-        chunks[-1].end = stream.tell()
-        return None
-
-
-def state_carrier(stream, chunks):
-    chunks.append(CarrierChunk())
-    chunks[-1].start = chunks[-1].end = stream.tell()
-
-    try:
-        # A byte consists of a start bit (0), eight data bits, and a stop bit
-        # (1). That's at most nine one-bits, or eighteen fast cycles, in a row.
-        # If we read nineteen or more fast cycles, we are in the carrier
-        # signal.
-        for _ in range(19):
-            read_cycle(stream, 2400)
-
-        try:
-            # Consume the remainder of the carrier tone.
-            while True:
-                read_cycle(stream, 2400)
-        except SyncError:
-            pass
-
-        chunks[-1].end = stream.tell()
-
-        # Read a start bit.
-        read_zero(stream)
-
-        return 'state_byte'
-
-    except EOFError:
-        chunks[-1].end = stream.tell()
-        return None
-
-
-def state_byte(stream, chunks):
+def peek(fn):
     start = stream.tell()
-
-    bits = []
-
-    # Read all eight bits.
-    for _ in range(8):
-        try:
-            read_zero(stream)
-            bits.append(0)
-        except SyncError:
-            read_one(stream)
-            bits.append(1)
-
-    # Read the stop bit.
-    read_one(stream)
-
-    if not (chunks and isinstance(chunks[-1], DataChunk)):
-        chunks.append(DataChunk())
-        chunks[-1].start = start
-        chunks[-1].bytes = []
-    chunks[-1].end = stream.tell()
-    chunks[-1].bytes.append(byte(bits))
-
-    # Another start bit for the next byte, or a fast cycle for a
-    # carrier.
     try:
-        read_zero(stream)
-        return 'state_byte'
-    except SyncError:
-        read_cycle(stream, 2400)
-        return 'state_carrier'
+        fn()
+        return True
+    except (EOFError, SyncError) as e:
+        return False
+    finally:
+        stream.seek(start)
 
+def slow_cycle():
+    cycle(1200)
 
-def write_uef(chunks, stream):
+def fast_cycle():
+    cycle(2400)
+
+def zero_bit():
+    slow_cycle()
+
+def one_bit():
+    fast_cycle()
+    fast_cycle()
+
+def start_bit():
+    zero_bit()
+
+def stop_bit():
+    one_bit()
+
+def data_bit():
+    if peek(zero_bit):
+        zero_bit()
+        return 0
+    else:
+        one_bit()
+        return 1
+
+def mark():
+    global marker
+    marker = stream.tell()
+
+def sync():
+    mark()
+    while not peek(fast_cycle):
+        sample()
+    chunks.append(Gap())
+
+def carrier():
+    mark()
+    fast_cycle()
+    while peek(fast_cycle):
+        fast_cycle()
+    chunks.append(Carrier())
+
+def data():
+    mark()
+    start_bit()
+    data = []
+    while True:
+        data.append(byte(data_bit() for _ in range(8)))
+        stop_bit()
+        if not peek(start_bit):
+            break
+        start_bit()
+    chunks.append(Data(data))
+
+def write_uef(stream):
     stream.write(b'UEF File!\x00')  # Magic value.
     stream.write(b'\x01\x00')       # Version 0.10.
 
@@ -263,15 +246,20 @@ def write_uef(chunks, stream):
 skip_header(sys.stdin.buffer)
 stream = io.BytesIO(sys.stdin.buffer.read())
 
-state = 'state_sync'
-chunks = []
-while state:
-    try:
-        handler = globals().get(state)
-        state = handler(stream, chunks)
-    except SyncError as e:
-        state = 'state_sync'
+sync()
+try:
+    while True:
+        print('.', end='', file=sys.stderr, flush=True)
+        try:
+            carrier()
+            data()
+        except SyncError:
+            sync()
+except EOFError:
+    print('Warning: premature end of file', file=sys.stderr)
 
-write_uef(chunks, sys.stdout.buffer)
+print()    
 for chunk in chunks:
     print(chunk, file=sys.stderr)
+
+write_uef(sys.stdout.buffer)
